@@ -1,0 +1,4 @@
+spotipy>=2.24.0
+twitchio>=2.8.0
+TikTokLive>=3.1.0
+python-dotenv>=1.0.1
