@@ -4,6 +4,7 @@ import signal
 import sys
 from dotenv import load_dotenv
 from src.spotify_service import SpotifyService
+from src.request_limiter import RequestLimiter
 from src.twitch_service import TwitchBot
 from src.tiktok_service import TikTokListener
 
@@ -21,7 +22,17 @@ async def main():
     print("        LA FORJA MUSIC BOT - TWITCH & TIKTOK TO SPOTIFY   ")
     print("==========================================================")
 
-    # 1. Initialize Spotify
+    # 1. Initialize Request Limiter
+    limiter = RequestLimiter()
+    if limiter.max_songs <= 0:
+        limit_desc = "Unlimited"
+    elif limiter.window_minutes > 0:
+        limit_desc = f"Max {limiter.max_songs} songs per {limiter.window_minutes} minutes"
+    else:
+        limit_desc = f"Max {limiter.max_songs} songs per stream session"
+    print(f"[OK] User Quota Policy  -> {limit_desc}")
+
+    # 2. Initialize Spotify
     try:
         spotify = SpotifyService(open_browser=False)
         if not spotify.is_authorized():
@@ -29,23 +40,23 @@ async def main():
             print("Please run: .\\.venv\\Scripts\\python authorize_spotify.py")
             sys.exit(1)
         playlist_name = spotify.get_playlist_name()
-        print(f"[OK] Spotify Connected -> Playlist: '{playlist_name}'")
+        print(f"[OK] Spotify Connected  -> Playlist: '{playlist_name}'")
     except Exception as e:
         logger.critical(f"Spotify initialization failed: {e}")
         sys.exit(1)
 
-    # 2. Initialize Twitch Bot
+    # 3. Initialize Twitch Bot
     try:
-        twitch_bot = TwitchBot(spotify_service=spotify)
-        print(f"[OK] Twitch Configured  -> Channel: #{twitch_bot.channel}")
+        twitch_bot = TwitchBot(spotify_service=spotify, request_limiter=limiter)
+        print(f"[OK] Twitch Configured   -> Channel: #{twitch_bot.channel}")
     except Exception as e:
         logger.error(f"Failed to initialize Twitch bot: {e}")
         twitch_bot = None
 
-    # 3. Initialize TikTok Listener
+    # 4. Initialize TikTok Listener
     try:
-        tiktok_listener = TikTokListener(spotify_service=spotify)
-        print(f"[OK] TikTok Configured  -> Streamer: @{tiktok_listener.unique_id}")
+        tiktok_listener = TikTokListener(spotify_service=spotify, request_limiter=limiter)
+        print(f"[OK] TikTok Configured   -> Streamer: @{tiktok_listener.unique_id}")
     except Exception as e:
         logger.error(f"Failed to initialize TikTok listener: {e}")
         tiktok_listener = None
@@ -58,6 +69,8 @@ async def main():
     print(" Active Commands in Chat:")
     print("   !sr <song title, artist, or Spotify link>")
     print("   !songrequest <song title, artist, or Spotify link>")
+    print("   !myrequests (check your remaining quota)")
+    print("   !resetrequests (broadcaster only: reset all quotas)")
     print(" Press Ctrl+C at any time to safely shut down.")
     print("----------------------------------------------------------\n")
 

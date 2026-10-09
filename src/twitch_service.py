@@ -7,6 +7,7 @@ from typing import Optional, Dict
 import websockets
 from dotenv import load_dotenv
 from src.spotify_service import SpotifyService
+from src.request_limiter import RequestLimiter
 
 load_dotenv()
 logger = logging.getLogger("TwitchService")
@@ -22,12 +23,14 @@ class TwitchBot:
     def __init__(
         self,
         spotify_service: SpotifyService,
+        request_limiter: Optional[RequestLimiter] = None,
         token: Optional[str] = None,
         channel: Optional[str] = None,
         prefix: str = "!",
         cooldown_seconds: int = 10
     ):
         self.spotify = spotify_service
+        self.limiter = request_limiter or RequestLimiter()
         raw_token = token or os.getenv("TWITCH_TOKEN", "")
         if raw_token and not raw_token.startswith("oauth:"):
             self.token = f"oauth:{raw_token}"
@@ -78,6 +81,12 @@ class TwitchBot:
 
         self._user_last_request[username] = now
 
+        # Check quota limit before doing anything else
+        allowed, limit_msg = self.limiter.can_request("twitch", username)
+        if not allowed:
+            await self.send_chat_message(f"@{username} {limit_msg}")
+            return
+
         logger.info(f"Processing Twitch request from @{username}: '{query}'")
         # Run Spotify request (Spotify API call is synchronous requests-based, run in executor)
         loop = asyncio.get_running_loop()
@@ -88,6 +97,11 @@ class TwitchBot:
             username,
             True
         )
+
+        if success:
+            count = self.limiter.record_request("twitch", username)
+            if self.limiter.max_songs > 0 and not self.limiter.is_broadcaster(username):
+                reply_msg += f" (Song #{count}/{self.limiter.max_songs})"
 
         await self.send_chat_message(f"@{username} {reply_msg}")
 
@@ -123,6 +137,28 @@ class TwitchBot:
                                 continue
 
                             clean_content = content.strip()
+
+                            # Broadcaster command to reset limits
+                            if clean_content.lower() in ("!resetrequests", "!clearlimits"):
+                                if sender.lower() == self.channel:
+                                    self.limiter.reset_limits()
+                                    await self.send_chat_message(f"@{sender} All song request limits have been reset!")
+                                else:
+                                    await self.send_chat_message(f"@{sender} Only the broadcaster can reset limits.")
+                                continue
+
+                            # Query current user requests
+                            if clean_content.lower() in ("!myrequests", "!requests"):
+                                count = self.limiter.get_user_count("twitch", sender)
+                                max_s = self.limiter.max_songs
+                                if self.limiter.is_broadcaster(sender):
+                                    await self.send_chat_message(f"@{sender} You are the broadcaster (unlimited requests).")
+                                elif max_s > 0:
+                                    await self.send_chat_message(f"@{sender} You have requested {count}/{max_s} songs.")
+                                else:
+                                    await self.send_chat_message(f"@{sender} Song requests are currently unlimited!")
+                                continue
+
                             # Check for !sr or !songrequest command
                             if clean_content.lower().startswith("!sr ") or clean_content.lower().startswith("!songrequest "):
                                 parts = clean_content.split(" ", 1)

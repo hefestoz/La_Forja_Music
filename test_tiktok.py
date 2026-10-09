@@ -19,15 +19,19 @@ async def test_simulation(listener: TikTokListener):
     test_cases = [
         ("tiktok_fan1", "!sr Radiohead Creep"),
         ("tiktok_fan2", "!sr https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT"),
-        ("tiktok_fan1", "!sr Daft Punk Around the World"),  # Should hit cooldown
         ("random_user", "Hola amigo como estas?"),         # Should ignore
-        ("music_lover", "!songrequest Gorillaz Feel Good Inc")
+        ("quota_tester", "!sr Michael Jackson Billie Jean"),
+        ("quota_tester", "!sr Queen Bohemian Rhapsody"),
+        ("quota_tester", "!sr AC/DC Back in Black"),
+        ("quota_tester", "!sr Led Zeppelin Stairway to Heaven"), # Exceeds limit of 3
     ]
 
     for user, text in test_cases:
+        # Clear cooldown timestamp for test purposes so we directly test quota limit
+        listener._user_last_request[user] = 0
         print(f"\n[Incoming Comment] @{user}: \"{text}\"")
         await listener.handle_comment(user, text)
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.5)
 
     print("\n[OK] Simulation test completed!")
 

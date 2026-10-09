@@ -8,6 +8,7 @@ from TikTokLive import TikTokLiveClient
 from TikTokLive.events import CommentEvent, ConnectEvent, DisconnectEvent, LiveEndEvent
 from TikTokLive.client.errors import UserOfflineError, UserNotFoundError, TikTokLiveError
 from src.spotify_service import SpotifyService
+from src.request_limiter import RequestLimiter
 
 load_dotenv()
 logger = logging.getLogger("TikTokService")
@@ -21,11 +22,13 @@ class TikTokListener:
     def __init__(
         self,
         spotify_service: SpotifyService,
+        request_limiter: Optional[RequestLimiter] = None,
         unique_id: Optional[str] = None,
         cooldown_seconds: int = 10,
         retry_interval: int = 30
     ):
         self.spotify = spotify_service
+        self.limiter = request_limiter or RequestLimiter()
         raw_username = unique_id or os.getenv("TIKTOK_USERNAME", "")
         self.unique_id = raw_username.lstrip("@").strip()
         self.cooldown_seconds = cooldown_seconds
@@ -59,6 +62,12 @@ class TikTokListener:
             return
         self._user_last_request[username] = now
 
+        # Quota check
+        allowed, limit_msg = self.limiter.can_request("tiktok", username)
+        if not allowed:
+            logger.info(f"[TikTok LIMIT] @{username}: {limit_msg}")
+            return
+
         logger.info(f"[TikTok] Song request received from @{username}: '{query}'")
         loop = asyncio.get_running_loop()
         success, reply_msg, track = await loop.run_in_executor(
@@ -70,6 +79,9 @@ class TikTokListener:
         )
 
         if success:
+            count = self.limiter.record_request("tiktok", username)
+            if self.limiter.max_songs > 0 and not self.limiter.is_broadcaster(username):
+                reply_msg += f" (Song #{count}/{self.limiter.max_songs})"
             logger.info(f"[TikTok SUCCESS] {reply_msg}")
         else:
             logger.info(f"[TikTok NOTICE] {reply_msg}")

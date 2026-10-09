@@ -53,9 +53,12 @@ class SpotifyService:
         self._playlist_name: Optional[str] = None
 
     def is_authorized(self) -> bool:
-        """Checks if a valid Spotify OAuth token exists in cache."""
+        """Checks if a valid Spotify OAuth token exists in cache, automatically refreshing if expired."""
         token = self.auth_manager.cache_handler.get_cached_token()
-        return bool(token and not self.auth_manager.is_token_expired(token))
+        if not token:
+            return False
+        valid_token = self.auth_manager.validate_token(token)
+        return valid_token is not None
 
 
     def get_playlist_name(self) -> str:
