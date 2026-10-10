@@ -27,6 +27,12 @@ def main():
         help="Username of requester (default: 'Tester')"
     )
 
+    parser.add_argument(
+        "--suite",
+        action="store_true",
+        help="Run comprehensive search test suite on edge cases and common queries"
+    )
+
     args = parser.parse_args()
 
     print("========================================")
@@ -50,6 +56,40 @@ def main():
         print(f"[OK] Connected to Playlist: '{playlist_name}' (ID: {service.playlist_id})\n")
     except Exception as e:
         print(f"[WARNING] Could not fetch playlist name: {e}\n")
+
+    if args.suite:
+        print("Running Search Integrity Test Suite...\n")
+        test_cases = [
+            ("International Link", "https://open.spotify.com/intl-es/track/7d1CFwrBmH34gmS0Hkbfbt?si=abcdef123456", "Replay", "Zendaya"),
+            ("Direct URI", "spotify:track:4cOdK2wGLETKBW3PvgPWqT", "Never Gonna Give You Up", "Rick Astley"),
+            ("Hyphenated Artist - Song", "Michael Jackson - Billie Jean", "Billie Jean", "Michael Jackson"),
+            ("Hyphenated Song - Artist", "Bohemian Rhapsody - Queen", "Bohemian Rhapsody", "Queen"),
+            ("Hyphen with Band Dash", "AC/DC - Back in Black", "Back In Black", "AC/DC"),
+            ("Word Delimiter 'by'", "Can't Stop by Red Hot Chili Peppers", "Can't Stop", "Red Hot Chili Peppers"),
+            ("Ambiguous Title 'in my head'", "Jason Derulo - In My Head", "In My Head", "Jason Derulo"),
+            ("Single Word Pop Query", "replay iyaz", "Replay", "Iyaz")
+        ]
+
+        passed = 0
+        for label, q, expected_title, expected_artist in test_cases:
+            res = service.search_track(q)
+            if not res:
+                print(f"[FAIL] {label}: '{q}' -> No track found!")
+                continue
+            
+            title_ok = expected_title.lower() in res["name"].lower()
+            artist_ok = any(expected_artist.lower() in a.lower() for a in res["artists"])
+
+            if title_ok and artist_ok:
+                print(f"[PASS] {label}: '{q}' -> \"{res['name']}\" by {res['artist_str']}")
+                passed += 1
+            else:
+                print(f"[FAIL] {label}: '{q}'")
+                print(f"       Got: \"{res['name']}\" by {res['artist_str']}")
+                print(f"       Expected: \"{expected_title}\" by {expected_artist}")
+
+        print(f"\nResults: {passed}/{len(test_cases)} tests passed.")
+        sys.exit(0 if passed == len(test_cases) else 1)
 
     if args.search_only:
         print(f"Searching for: '{args.query}'...")

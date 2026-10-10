@@ -1,6 +1,7 @@
 import os
 import re
 import logging
+from difflib import SequenceMatcher
 from typing import Optional, Dict, Any, Tuple
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
@@ -82,9 +83,11 @@ class SpotifyService:
     def extract_track_id(query: str) -> Optional[str]:
         """
         Extracts Spotify track ID from a URL or URI if provided.
-        Example:
-            https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT?si=... -> 4cOdK2wGLETKBW3PvgPWqT
-            spotify:track:4cOdK2wGLETKBW3PvgPWqT -> 4cOdK2wGLETKBW3PvgPWqT
+        Supports:
+            - https://open.spotify.com/track/4cOdK2wGLETKBW3PvgPWqT?si=...
+            - https://open.spotify.com/intl-es/track/4cOdK2wGLETKBW3PvgPWqT?si=...
+            - spotify:track:4cOdK2wGLETKBW3PvgPWqT
+            - Direct 22-character ID
         """
         query = query.strip()
         # Direct track ID match (22 alphanumeric chars)
@@ -96,49 +99,197 @@ class SpotifyService:
         if uri_match:
             return uri_match.group(1)
 
-        # URL match (open.spotify.com/track/ID)
-        url_match = re.search(r"open\.spotify\.com/track/([0-9A-Za-z]{22})", query)
+        # URL match (supports international localized links like /intl-es/track/ID and query parameters)
+        url_match = re.search(r"open\.spotify\.com/(?:intl-[a-z]{2}/)?track/([0-9A-Za-z]{22})", query)
         if url_match:
             return url_match.group(1)
 
         return None
 
+    @staticmethod
+    def _format_track_dict(track: Dict[str, Any]) -> Dict[str, Any]:
+        """Formats a raw Spotify track API object into standard dictionary."""
+        artists = [a["name"] for a in track.get("artists", [])]
+        return {
+            "id": track["id"],
+            "uri": track["uri"],
+            "name": track["name"],
+            "artists": artists,
+            "artist_str": ", ".join(artists) if artists else "Unknown Artist",
+            "duration_ms": track.get("duration_ms", 0),
+            "external_url": track.get("external_urls", {}).get("spotify", "")
+        }
+
+    @staticmethod
+    def _rank_candidates(query: str, items: list) -> list:
+        """
+        Ranks candidates by title similarity, word coverage, and relevance,
+        penalizing spam, karaoke, tribute bands, covers, and instrumental tracks
+        unless the user explicitly asked for them.
+        """
+        if not items:
+            return []
+
+        query_clean = query.lower().strip()
+        user_wants_karaoke = "karaoke" in query_clean
+        user_wants_cover = "cover" in query_clean
+        user_wants_live = "live" in query_clean
+        user_wants_instrumental = "instrumental" in query_clean
+        user_wants_remix = "remix" in query_clean
+        user_wants_tribute = "tribute" in query_clean
+
+        query_tokens = set(re.findall(r"\w+", query_clean))
+
+        scored = []
+        for idx, t in enumerate(items):
+            name = (t.get("name") or "").lower()
+            artists = [(a.get("name") or "").lower() for a in t.get("artists", [])]
+            artists_str = " ".join(artists)
+            full_track_str = f"{name} {artists_str}"
+            track_tokens = set(re.findall(r"\w+", full_track_str))
+
+            # Base score preserves Spotify's default algorithmic preference
+            # Index 0 gets +10, index 9 gets +1
+            score = 10.0 - (idx * 0.9)
+
+            # Popularity contribution if available
+            pop = t.get("popularity")
+            if isinstance(pop, (int, float)):
+                score += (pop / 100.0) * 20.0
+
+            # Sequence similarity against title alone or full title+artist
+            sim_title = SequenceMatcher(None, query_clean, name).ratio()
+            sim_full = SequenceMatcher(None, query_clean, full_track_str).ratio()
+            score += max(sim_title, sim_full) * 35.0
+
+            # Token overlap: fraction of user's query words found in track title or artists
+            if query_tokens:
+                matched_tokens = query_tokens.intersection(track_tokens)
+                token_ratio = len(matched_tokens) / len(query_tokens)
+                score += token_ratio * 35.0
+
+            # Exact title match bonus
+            if name == query_clean:
+                score += 20.0
+
+            # Exact artist match bonus
+            for art in artists:
+                if art in query_clean or query_clean in art:
+                    score += 15.0
+                    break
+
+            # Penalties for junk / low-quality / unwanted track types
+            if not user_wants_karaoke and "karaoke" in name:
+                score -= 70.0
+            if not user_wants_cover and not user_wants_tribute and any(
+                x in name for x in ["originally performed", "tribute to", "tribute band", "in the style of"]
+            ):
+                score -= 60.0
+            if not user_wants_cover and "cover" in name:
+                score -= 40.0
+            if not user_wants_instrumental and "instrumental" in name:
+                score -= 45.0
+            if not user_wants_remix and "remix" in name:
+                score -= 15.0
+            if not user_wants_live and any(
+                x in name for x in ["live at", "live in", "live from", "(live)", "- live"]
+            ):
+                score -= 15.0
+
+            scored.append((score, t))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [t for _, t in scored]
+
     def search_track(self, query: str) -> Optional[Dict[str, Any]]:
         """
         Resolves a search query (free text or Spotify link/URI) into a track object.
+        Uses a multi-tier search process:
+          1. Direct Spotify URL / URI / ID extraction (supports localized intl-* links)
+          2. Delimiter parsing ('Artist - Title' or 'Title by Artist') using Spotify field filters
+          3. Sanitized broad search with candidate ranking and junk/karaoke filtering
         """
         query = query.strip()
         if not query:
             return None
 
+        # -------------------------------------------------------------
+        # Tier 1: Direct Spotify Link / URI / ID
+        # -------------------------------------------------------------
         track_id = self.extract_track_id(query)
-
-        try:
-            if track_id:
+        if track_id:
+            try:
                 track = self.sp.track(track_id)
-            else:
-                results = self.sp.search(q=query, type="track", limit=1)
-                items = results.get("tracks", {}).get("items", [])
-                if not items:
-                    return None
-                track = items[0]
+                if track:
+                    return self._format_track_dict(track)
+            except Exception as e:
+                logger.warning(f"Failed to fetch track by direct ID {track_id}: {e}")
 
-            artists = [a["name"] for a in track.get("artists", [])]
-            return {
-                "id": track["id"],
-                "uri": track["uri"],
-                "name": track["name"],
-                "artists": artists,
-                "artist_str": ", ".join(artists) if artists else "Unknown Artist",
-                "duration_ms": track["duration_ms"],
-                "external_url": track["external_urls"].get("spotify", "")
-            }
-        except SpotifyException as e:
-            logger.error(f"Spotify API error during search: {e}")
+        # -------------------------------------------------------------
+        # Tier 2: Structured Query Detection ('Artist - Title', 'Title by Artist', etc.)
+        # -------------------------------------------------------------
+        candidate_items = []
+        delimiters = [" - ", " – ", " — ", " by ", " // "]
+        detected_parts = None
+
+        for delim in delimiters:
+            if delim in query.lower() if delim == " by " else delim in query:
+                parts = re.split(re.escape(delim), query, flags=re.IGNORECASE, maxsplit=1)
+                if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+                    detected_parts = (parts[0].strip(), parts[1].strip())
+                    break
+
+        if detected_parts:
+            part1, part2 = detected_parts
+            # Try both (artist, track) and (track, artist)
+            structured_queries = [
+                f'track:"{part2}" artist:"{part1}"',
+                f'track:"{part1}" artist:"{part2}"'
+            ]
+            for sq in structured_queries:
+                try:
+                    res = self.sp.search(q=sq, type="track", limit=5)
+                    items = res.get("tracks", {}).get("items", [])
+                    if items:
+                        candidate_items.extend(items)
+                except Exception as e:
+                    logger.debug(f"Structured search '{sq}' error: {e}")
+
+        # -------------------------------------------------------------
+        # Tier 3: Sanitized Broad Search with Candidate Ranking
+        # -------------------------------------------------------------
+        if not candidate_items:
+            # Replace hyphens/dashes with spaces to prevent Spotify Lucene negation
+            clean_query = re.sub(r"[-–—]", " ", query)
+            clean_query = re.sub(r"\s+", " ", clean_query).strip()
+
+            try:
+                res = self.sp.search(q=clean_query, type="track", limit=10)
+                items = res.get("tracks", {}).get("items", [])
+                if items:
+                    candidate_items.extend(items)
+            except Exception as e:
+                logger.error(f"Spotify broad search error for '{clean_query}': {e}")
+
+        if not candidate_items:
             return None
-        except Exception as e:
-            logger.error(f"Unexpected error searching track: {e}")
+
+        # Deduplicate items by track ID while preserving order
+        seen_ids = set()
+        unique_items = []
+        for item in candidate_items:
+            t_id = item.get("id")
+            if t_id and t_id not in seen_ids:
+                seen_ids.add(t_id)
+                unique_items.append(item)
+
+        # Rank candidates using intelligent scoring
+        ranked = self._rank_candidates(query, unique_items)
+        if not ranked:
             return None
+
+        best_track = ranked[0]
+        return self._format_track_dict(best_track)
 
     def is_track_in_playlist(self, track_uri: str, limit_check: int = 100) -> bool:
         """
