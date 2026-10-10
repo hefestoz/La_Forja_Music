@@ -20,7 +20,10 @@ class SpotifyService:
         "playlist-modify-public",
         "playlist-modify-private",
         "playlist-read-private",
-        "playlist-read-collaborative"
+        "playlist-read-collaborative",
+        "user-read-currently-playing",
+        "user-read-playback-state",
+        "user-modify-playback-state"
     ]
 
     def __init__(
@@ -51,6 +54,8 @@ class SpotifyService:
         )
         self.sp = spotipy.Spotify(auth_manager=self.auth_manager)
         self._playlist_name: Optional[str] = None
+        self._requester_history: Dict[str, Dict[str, Any]] = {}
+        self._recent_requests: list[Dict[str, Any]] = []
 
     def is_authorized(self) -> bool:
         """Checks if a valid Spotify OAuth token exists in cache, automatically refreshing if expired."""
@@ -176,6 +181,25 @@ class SpotifyService:
 
         try:
             self.sp.playlist_add_items(self.playlist_id, [track["uri"]])
+            
+            # Record requester metadata
+            import time
+            self._requester_history[track["uri"]] = {
+                "requested_by": requested_by,
+                "title": track["name"],
+                "artist": track["artist_str"],
+                "time": time.time()
+            }
+            self._recent_requests.insert(0, {
+                "title": track["name"],
+                "artist": track["artist_str"],
+                "requested_by": requested_by,
+                "time": time.time(),
+                "url": track["external_url"]
+            })
+            if len(self._recent_requests) > 30:
+                self._recent_requests.pop()
+
             logger.info(f"Added {track_title} (requested by {requested_by}) to playlist {self.playlist_id}")
             return True, f"Added {track_title} to the playlist! (requested by {requested_by})", track
         except SpotifyException as e:
@@ -184,3 +208,100 @@ class SpotifyService:
         except Exception as e:
             logger.error(f"Unexpected error adding track: {e}")
             return False, "An unexpected error occurred while adding the song.", track
+
+    def get_currently_playing(self) -> Optional[Dict[str, Any]]:
+        """
+        Fetches currently playing track status, progress, and requester attribution.
+        """
+        try:
+            playback = self.sp.current_playback()
+            if not playback or not playback.get("item"):
+                return None
+
+            item = playback["item"]
+            track_uri = item.get("uri")
+            requester_info = self._requester_history.get(track_uri)
+
+            artists = [a["name"] for a in item.get("artists", [])]
+            album = item.get("album", {})
+            images = album.get("images", [])
+            album_art = images[0]["url"] if images else ""
+
+            return {
+                "id": item.get("id"),
+                "uri": track_uri,
+                "title": item.get("name"),
+                "artists": artists,
+                "artist_str": ", ".join(artists) if artists else "Unknown",
+                "album_name": album.get("name", ""),
+                "album_art": album_art,
+                "duration_ms": item.get("duration_ms", 0),
+                "progress_ms": playback.get("progress_ms", 0),
+                "is_playing": playback.get("is_playing", False),
+                "volume_percent": playback.get("device", {}).get("volume_percent", 100),
+                "requested_by": requester_info.get("requested_by") if requester_info else None
+            }
+        except Exception as e:
+            logger.debug(f"Could not fetch current playback: {e}")
+            return None
+
+    def next_track(self) -> bool:
+        """Skips to the next track on Spotify."""
+        try:
+            self.sp.next_track()
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to skip track: {e}")
+            return False
+
+    def previous_track(self) -> bool:
+        """Plays the previous track on Spotify."""
+        try:
+            self.sp.previous_track()
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to play previous track: {e}")
+            return False
+
+    def toggle_playback(self) -> bool:
+        """Toggles play/pause on Spotify."""
+        try:
+            playback = self.sp.current_playback()
+            if playback and playback.get("is_playing"):
+                self.sp.pause_playback()
+            else:
+                self.sp.start_playback()
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to toggle playback: {e}")
+            return False
+
+    def set_volume(self, volume_percent: int) -> bool:
+        """Sets Spotify volume (0 - 100)."""
+        try:
+            vol = max(0, min(100, volume_percent))
+            self.sp.volume(vol)
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to set volume: {e}")
+            return False
+
+    def get_recent_requests(self) -> list[Dict[str, Any]]:
+        """Returns the list of recently requested songs."""
+        return list(self._recent_requests)
+
+    def clear_playlist(self) -> bool:
+        """Clears all songs currently in the request playlist."""
+        try:
+            items = self.sp.playlist_items(self.playlist_id, fields="items(item(uri),track(uri))")
+            uris = []
+            for raw_item in items.get("items", []):
+                t = raw_item.get("item") or raw_item.get("track")
+                if t and t.get("uri"):
+                    uris.append(t["uri"])
+            if uris:
+                self.sp.playlist_remove_all_occurrences_of_items(self.playlist_id, uris)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to clear playlist: {e}")
+            return False

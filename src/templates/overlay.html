@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OBS Now Playing Overlay</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      background: transparent;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      color: #FFFFFF;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+      display: flex;
+      align-items: center;
+      padding: 16px;
+    }
+
+    .widget-container {
+      display: flex;
+      align-items: center;
+      background: rgba(14, 16, 22, 0.85);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 16px;
+      padding: 14px 18px;
+      gap: 16px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+      width: 580px;
+      max-width: 100%;
+      transition: opacity 0.4s ease, transform 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+      opacity: 0;
+      transform: translateY(20px);
+    }
+
+    .widget-container.active {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    /* Album Art */
+    .art-wrapper {
+      position: relative;
+      width: 82px;
+      height: 82px;
+      min-width: 82px;
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.6);
+      background: #1e2029;
+    }
+    .art-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+      transition: transform 0.3s ease;
+    }
+
+    /* Track Metadata */
+    .track-details {
+      display: flex;
+      flex-direction: column;
+      flex-grow: 1;
+      min-width: 0;
+      gap: 3px;
+    }
+
+    .title-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      overflow: hidden;
+      white-space: nowrap;
+    }
+    .track-title {
+      font-size: 17px;
+      font-weight: 700;
+      color: #FFFFFF;
+      text-overflow: ellipsis;
+      overflow: hidden;
+      letter-spacing: -0.2px;
+    }
+
+    .track-artist {
+      font-size: 13.5px;
+      font-weight: 500;
+      color: #A0A5BA;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* Requester Badge */
+    .requester-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 11.5px;
+      font-weight: 600;
+      padding: 3px 8px;
+      border-radius: 6px;
+      margin-top: 2px;
+      width: fit-content;
+      text-transform: none;
+    }
+    .badge-tiktok {
+      background: rgba(254, 44, 85, 0.18);
+      color: #FE2C55;
+      border: 1px solid rgba(254, 44, 85, 0.35);
+    }
+    .badge-twitch {
+      background: rgba(145, 71, 255, 0.18);
+      color: #A970FF;
+      border: 1px solid rgba(145, 71, 255, 0.35);
+    }
+    .badge-default {
+      background: rgba(29, 185, 84, 0.15);
+      color: #1DB954;
+      border: 1px solid rgba(29, 185, 84, 0.3);
+    }
+
+    /* Progress bar */
+    .progress-bar-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-top: 4px;
+    }
+    .progress-track {
+      flex-grow: 1;
+      height: 5px;
+      background: rgba(255, 255, 255, 0.12);
+      border-radius: 3px;
+      overflow: hidden;
+      position: relative;
+    }
+    .progress-fill {
+      height: 100%;
+      background: linear-gradient(90deg, #1DB954, #1ed760);
+      width: 0%;
+      border-radius: 3px;
+      transition: width 0.25s linear;
+    }
+    .time-label {
+      font-size: 11px;
+      color: #7A8098;
+      font-variant-numeric: tabular-nums;
+      min-width: 32px;
+      text-align: right;
+    }
+
+    /* Animated Equalizer */
+    .equalizer {
+      display: flex;
+      align-items: flex-end;
+      height: 24px;
+      gap: 3px;
+      margin-left: 4px;
+      min-width: 22px;
+    }
+    .eq-bar {
+      width: 3.5px;
+      background: #1DB954;
+      border-radius: 2px;
+      height: 6px;
+      transition: height 0.2s ease, opacity 0.3s ease;
+    }
+    .equalizer.playing .eq-bar:nth-child(1) { animation: bounce 1.1s infinite ease-in-out; }
+    .equalizer.playing .eq-bar:nth-child(2) { animation: bounce 0.8s infinite ease-in-out 0.2s; }
+    .equalizer.playing .eq-bar:nth-child(3) { animation: bounce 1.3s infinite ease-in-out 0.4s; }
+    .equalizer.playing .eq-bar:nth-child(4) { animation: bounce 0.9s infinite ease-in-out 0.1s; }
+
+    @keyframes bounce {
+      0%, 100% { height: 4px; }
+      50% { height: 22px; }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="widget-container" id="widget">
+    <div class="art-wrapper">
+      <img id="albumArt" class="art-img" src="" alt="Album Art">
+    </div>
+
+    <div class="track-details">
+      <div class="title-row">
+        <span id="trackTitle" class="track-title">Loading...</span>
+      </div>
+      <span id="trackArtist" class="track-artist">Connecting to Spotify</span>
+
+      <div id="requesterBadge" class="requester-badge" style="display: none;"></div>
+
+      <div class="progress-bar-wrap">
+        <div class="progress-track">
+          <div id="progressFill" class="progress-fill"></div>
+        </div>
+        <span id="timeLabel" class="time-label">0:00</span>
+      </div>
+    </div>
+
+    <div id="equalizer" class="equalizer">
+      <div class="eq-bar"></div>
+      <div class="eq-bar"></div>
+      <div class="eq-bar"></div>
+      <div class="eq-bar"></div>
+    </div>
+  </div>
+
+  <script>
+    const widget = document.getElementById('widget');
+    const albumArt = document.getElementById('albumArt');
+    const trackTitle = document.getElementById('trackTitle');
+    const trackArtist = document.getElementById('trackArtist');
+    const requesterBadge = document.getElementById('requesterBadge');
+    const progressFill = document.getElementById('progressFill');
+    const timeLabel = document.getElementById('timeLabel');
+    const equalizer = document.getElementById('equalizer');
+
+    let currentProgressMs = 0;
+    let currentDurationMs = 0;
+    let isPlaying = false;
+    let lastFetchTime = Date.now();
+
+    function formatTime(ms) {
+      const totalSec = Math.floor(ms / 1000);
+      const min = Math.floor(totalSec / 60);
+      const sec = totalSec % 60;
+      return `${min}:${sec < 10 ? '0' : ''}${sec}`;
+    }
+
+    async function fetchPlayback() {
+      try {
+        const res = await fetch('/api/now-playing');
+        if (!res.ok) throw new Error('Network error');
+        const data = await res.json();
+
+        if (data && data.title) {
+          widget.classList.add('active');
+
+          if (albumArt.src !== data.album_art && data.album_art) {
+            albumArt.src = data.album_art;
+          }
+          trackTitle.textContent = data.title;
+          trackArtist.textContent = data.artist_str || 'Unknown Artist';
+
+          currentProgressMs = data.progress_ms || 0;
+          currentDurationMs = data.duration_ms || 1;
+          isPlaying = data.is_playing || false;
+          lastFetchTime = Date.now();
+
+          // Requester badge
+          if (data.requested_by) {
+            requesterBadge.style.display = 'inline-flex';
+            const req = data.requested_by;
+            if (req.toLowerCase().includes('tiktok')) {
+              requesterBadge.className = 'requester-badge badge-tiktok';
+              requesterBadge.textContent = `🎵 ${req}`;
+            } else if (req.toLowerCase().includes('twitch')) {
+              requesterBadge.className = 'requester-badge badge-twitch';
+              requesterBadge.textContent = `🎵 ${req}`;
+            } else {
+              requesterBadge.className = 'requester-badge badge-default';
+              requesterBadge.textContent = `🎵 Requested by ${req}`;
+            }
+          } else {
+            requesterBadge.style.display = 'none';
+          }
+
+          // Equalizer
+          if (isPlaying) {
+            equalizer.classList.add('playing');
+            equalizer.style.opacity = '1';
+          } else {
+            equalizer.classList.remove('playing');
+            equalizer.style.opacity = '0.3';
+          }
+
+        } else {
+          // No track playing, hide widget
+          widget.classList.remove('active');
+          equalizer.classList.remove('playing');
+        }
+      } catch (e) {
+        // Silent retry
+      }
+    }
+
+    // 60fps smooth progress ticker
+    function updateProgressFrame() {
+      if (isPlaying && currentDurationMs > 0) {
+        const now = Date.now();
+        const elapsed = now - lastFetchTime;
+        const estProgress = Math.min(currentProgressMs + elapsed, currentDurationMs);
+        const pct = (estProgress / currentDurationMs) * 100;
+        progressFill.style.width = `${pct}%`;
+        timeLabel.textContent = formatTime(estProgress);
+      } else if (currentDurationMs > 0) {
+        const pct = (currentProgressMs / currentDurationMs) * 100;
+        progressFill.style.width = `${pct}%`;
+        timeLabel.textContent = formatTime(currentProgressMs);
+      }
+      requestAnimationFrame(updateProgressFrame);
+    }
+
+    // Initial fetch and intervals
+    fetchPlayback();
+    setInterval(fetchPlayback, 1200);
+    requestAnimationFrame(updateProgressFrame);
+  </script>
+</body>
+</html>
