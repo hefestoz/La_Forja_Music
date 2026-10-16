@@ -375,7 +375,7 @@ python main.py --no-gui
 ### 5. Configuring OBS Studio / TikTok Live Studio
 1. In OBS Studio, add a **Browser Source**.
 2. **URL**: `http://localhost:5000/overlay`
-3. **Width**: `600` | **Height**: `160`
+3. **Width**: `400` | **Height**: `90` (compact widget)
 4. Check **Shutdown source when not visible** (recommended).
 
 ---

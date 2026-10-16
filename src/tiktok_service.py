@@ -1,8 +1,9 @@
 import os
+import re
 import time
 import asyncio
 import logging
-from typing import Optional, Dict
+from typing import Optional, Dict, Tuple, Any
 from dotenv import load_dotenv
 from TikTokLive import TikTokLiveClient
 from TikTokLive.events import CommentEvent, ConnectEvent, DisconnectEvent, LiveEndEvent
@@ -41,40 +42,84 @@ class TikTokListener:
         if not self.unique_id:
             raise ValueError("TIKTOK_USERNAME must be configured.")
 
-    async def handle_comment(self, username: str, comment_text: str) -> None:
-        """Processes a comment text for !sr commands."""
+    @staticmethod
+    def _extract_user_info(user: Any) -> Tuple[str, str]:
+        """
+        Extracts (tracking_id, display_name) from a TikTokLive user object.
+        - tracking_id: persistent identifier (unique_id or numeric ID) used for rate limits and cooldowns.
+        - display_name: chatter's profile nickname shown in chat, stripping auto-generated numbers.
+        """
+        if not user:
+            return "anonymous", "Anonymous"
+
+        # Unique handle or numeric ID (e.g. "3564346218" or "hefestoz")
+        raw_unique_id = getattr(user, "unique_id", None) or getattr(user, "display_id", None)
+        user_num_id = getattr(user, "user_id", None) or getattr(user, "id", None)
+        tracking_id = str(raw_unique_id or user_num_id or "anonymous").strip()
+
+        # Nickname / Profile display name (e.g. "Juan Perez 🔥")
+        raw_nickname = getattr(user, "nick_name", None) or getattr(user, "nickname", None)
+        nickname = str(raw_nickname).strip() if raw_nickname else ""
+
+        # Check if unique_id is an auto-generated random numeric ID (e.g. "3564346218" or "user12345678")
+        is_numeric_handle = bool(re.match(r"^(user)?\d+$", tracking_id, re.IGNORECASE))
+
+        if nickname:
+            display_name = nickname
+        elif not is_numeric_handle and tracking_id != "anonymous":
+            display_name = f"@{tracking_id}"
+        elif tracking_id != "anonymous":
+            display_name = "TikTok Viewer"
+        else:
+            display_name = "Anonymous"
+
+        return tracking_id, display_name
+
+    async def handle_comment(
+        self,
+        username: str,
+        comment_text: str,
+        display_name: Optional[str] = None
+    ) -> None:
+        """
+        Processes a comment text for !sr commands.
+        - username: tracking ID used for rate limits and cooldowns.
+        - display_name: human-readable profile nickname shown on OBS overlay and Spotify queue.
+        """
         clean_text = comment_text.strip()
         if not (clean_text.lower().startswith("!sr ") or clean_text.lower().startswith("!songrequest ")):
             return
 
+        resolved_display = (display_name or username).strip()
+
         parts = clean_text.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
-            logger.info(f"[TikTok] User @{username} used !sr without query.")
+            logger.info(f"[TikTok] User {resolved_display} used !sr without query.")
             return
 
         query = parts[1].strip()
 
-        # Cooldown check
+        # Cooldown check (keyed on persistent username/tracking_id)
         now = time.time()
         last_req = self._user_last_request.get(username, 0)
         if now - last_req < self.cooldown_seconds:
-            logger.info(f"[TikTok] Cooldown: @{username} requested too quickly.")
+            logger.info(f"[TikTok] Cooldown: {resolved_display} requested too quickly.")
             return
         self._user_last_request[username] = now
 
-        # Quota check
+        # Quota check (keyed on persistent username/tracking_id)
         allowed, limit_msg = self.limiter.can_request("tiktok", username)
         if not allowed:
-            logger.info(f"[TikTok LIMIT] @{username}: {limit_msg}")
+            logger.info(f"[TikTok LIMIT] {resolved_display}: {limit_msg}")
             return
 
-        logger.info(f"[TikTok] Song request received from @{username}: '{query}'")
+        logger.info(f"[TikTok] Song request received from {resolved_display} ({username}): '{query}'")
         loop = asyncio.get_running_loop()
         success, reply_msg, track = await loop.run_in_executor(
             None,
             self.spotify.add_song_request,
             query,
-            f"TikTok/@{username}",
+            f"TikTok/{resolved_display}",
             True
         )
 
@@ -104,8 +149,8 @@ class TikTokListener:
 
         @client.on(CommentEvent)
         async def on_comment(event: CommentEvent):
-            username = event.user.unique_id if event.user else "Anonymous"
-            await self.handle_comment(username, event.comment)
+            tracking_id, display_name = self._extract_user_info(event.user)
+            await self.handle_comment(tracking_id, event.comment, display_name=display_name)
 
         return client
 
