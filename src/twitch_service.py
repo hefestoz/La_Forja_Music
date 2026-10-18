@@ -3,7 +3,8 @@ import re
 import time
 import asyncio
 import logging
-from typing import Optional, Dict
+from typing import Optional, Dict, Tuple, List
+import requests
 import websockets
 from dotenv import load_dotenv
 from src.spotify_service import SpotifyService
@@ -26,6 +27,7 @@ class TwitchBot:
         request_limiter: Optional[RequestLimiter] = None,
         token: Optional[str] = None,
         channel: Optional[str] = None,
+        nick: Optional[str] = None,
         prefix: str = "!",
         cooldown_seconds: int = 10
     ):
@@ -39,7 +41,8 @@ class TwitchBot:
 
         raw_channel = channel or os.getenv("TWITCH_CHANNEL", "")
         self.channel = raw_channel.lower().lstrip("#")
-        self.nick = self.channel
+        raw_nick = nick or os.getenv("TWITCH_NICK", "")
+        self.nick = raw_nick.lower().lstrip("#") if raw_nick else self.channel
         self.prefix = prefix
         self.cooldown_seconds = cooldown_seconds
 
@@ -181,3 +184,37 @@ class TwitchBot:
     def stop(self) -> None:
         """Stops the Twitch listener."""
         self._running = False
+
+
+def validate_twitch_token(token: str) -> Tuple[bool, Optional[str], List[str], Optional[str]]:
+    """
+    Validates a Twitch OAuth token using Twitch's official token validation endpoint:
+    GET https://id.twitch.tv/oauth2/validate
+
+    Returns:
+        (is_valid, login_name, scopes, error_message)
+    """
+    clean_token = token.strip()
+    if clean_token.startswith("oauth:"):
+        clean_token = clean_token[6:].strip()
+
+    if not clean_token:
+        return False, None, [], "Empty token provided."
+
+    url = "https://id.twitch.tv/oauth2/validate"
+    headers = {"Authorization": f"OAuth {clean_token}"}
+
+    try:
+        resp = requests.get(url, headers=headers, timeout=6)
+        if resp.status_code == 200:
+            data = resp.json()
+            login = data.get("login", "")
+            scopes = data.get("scopes", [])
+            return True, login, scopes, None
+        elif resp.status_code == 401:
+            return False, None, [], "Invalid or expired Twitch token."
+        else:
+            return False, None, [], f"Twitch validation failed (HTTP {resp.status_code})"
+    except Exception as e:
+        return False, None, [], f"Connection error during validation: {e}"
+

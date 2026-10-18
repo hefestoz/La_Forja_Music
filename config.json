@@ -1,0 +1,19 @@
+{
+  "spotify_client_id": "21f6791ef8e94db6ac4605da54277b24",
+  "spotify_client_secret": "0da62a48f8b24e588d457653488e1aed",
+  "spotify_redirect_uri": "http://127.0.0.1:8888/callback",
+  "spotify_playlist_id": "0A2gxbYSi2vTFDl9oTvwB2",
+  "spotify_playlist_name": "Stream Playlist",
+  "enable_twitch": true,
+  "twitch_client_id": "",
+  "twitch_token": "oauth:zb3411469o75t5764j43bnor8t3qco",
+  "twitch_nick": "hefestoz",
+  "twitch_channel": "hefestoz",
+  "enable_tiktok": true,
+  "tiktok_username": "hefestoz",
+  "max_songs_per_user": 0,
+  "user_limit_window_minutes": 0,
+  "cooldown_seconds": 10,
+  "overlay_port": 5000,
+  "auto_launch_browser": true
+}

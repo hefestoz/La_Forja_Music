@@ -69,6 +69,15 @@ def test_reset_limits():
     assert limiter.can_request("twitch", "chatterA")[0], "Should be allowed after global reset"
     print("  [OK] Global reset cleared all quotas")
 
+def test_unlimited_mode():
+    print("\nTesting Unlimited Mode (max_songs_per_user = 0)...")
+    limiter = RequestLimiter(max_songs_per_user=0, window_minutes=0, broadcaster_username="hefestoz")
+    for i in range(10):
+        allowed, msg = limiter.can_request("twitch", "regular_chatter")
+        assert allowed, "Unlimited mode should allow any number of requests"
+        limiter.record_request("twitch", "regular_chatter")
+    print("  [OK] Regular chatter made 10 requests without being blocked under Unlimited mode")
+
 if __name__ == "__main__":
     print("========================================")
     print(" Running Request Limiter Unit Tests")
@@ -77,4 +86,5 @@ if __name__ == "__main__":
     test_broadcaster_bypass()
     test_rolling_window()
     test_reset_limits()
+    test_unlimited_mode()
     print("\n[SUCCESS] ALL REQUEST LIMITER TESTS PASSED!")

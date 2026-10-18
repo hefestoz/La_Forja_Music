@@ -31,7 +31,7 @@ class TikTokListener:
         self.spotify = spotify_service
         self.limiter = request_limiter or RequestLimiter()
         raw_username = unique_id or os.getenv("TIKTOK_USERNAME", "")
-        self.unique_id = raw_username.lstrip("@").strip()
+        self.unique_id = raw_username.lstrip("@").strip().lower()
         self.cooldown_seconds = cooldown_seconds
         self.retry_interval = retry_interval
 
@@ -167,7 +167,10 @@ class TikTokListener:
                 logger.info(f"[TikTok] @{self.unique_id} is currently OFFLINE. Checking again in {self.retry_interval}s...")
                 await asyncio.sleep(self.retry_interval)
             except UserNotFoundError:
-                logger.error(f"[TikTok] User @{self.unique_id} not found. Please check TIKTOK_USERNAME.")
+                logger.warning(
+                    f"[TikTok] User '{self.unique_id}' was not found or has no active TikTok LIVE stream. "
+                    f"Checking again in 60s... (Note: TikTok requires the exact lowercase username handle, and the account must be live or have streamed before)."
+                )
                 await asyncio.sleep(60)
             except asyncio.CancelledError:
                 logger.info("[TikTok] Listener cancelled.")

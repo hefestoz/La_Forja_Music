@@ -42,8 +42,6 @@ class SpotifyService:
 
         if not self.client_id or not self.client_secret:
             raise ValueError("SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET must be set.")
-        if not self.playlist_id:
-            raise ValueError("SPOTIFY_PLAYLIST_ID must be set.")
 
         self.auth_manager = SpotifyOAuth(
             client_id=self.client_id,
@@ -66,9 +64,78 @@ class SpotifyService:
         valid_token = self.auth_manager.validate_token(token)
         return valid_token is not None
 
+    def get_authorize_url(self) -> str:
+        """Returns the Spotify OAuth authorization URL."""
+        return self.auth_manager.get_authorize_url()
+
+    def exchange_code(self, code: str) -> bool:
+        """Exchanges an authorization code for cached tokens."""
+        try:
+            token = self.auth_manager.get_access_token(code=code, as_dict=True)
+            return token is not None
+        except Exception as e:
+            logger.error(f"Failed to exchange Spotify authorization code: {e}")
+            return False
+
+    def get_current_user_profile(self) -> Optional[Dict[str, Any]]:
+        """Retrieves currently logged-in user profile info (name, image, product)."""
+        try:
+            me = self.sp.me()
+            images = me.get("images", [])
+            return {
+                "id": me.get("id"),
+                "display_name": me.get("display_name", "Spotify User"),
+                "image_url": images[0]["url"] if images else "",
+                "product": me.get("product", "unknown")
+            }
+        except Exception as e:
+            logger.debug(f"Could not fetch current user profile: {e}")
+            return None
+
+    def get_user_playlists(self, limit: int = 50) -> list[Dict[str, Any]]:
+        """Retrieves list of user's playlists for selection in Setup Wizard."""
+        try:
+            res = self.sp.current_user_playlists(limit=limit)
+            items = res.get("items", [])
+            playlists = []
+            for p in items:
+                playlists.append({
+                    "id": p["id"],
+                    "name": p["name"],
+                    "tracks_total": p.get("tracks", {}).get("total", 0)
+                })
+            return playlists
+        except Exception as e:
+            logger.error(f"Error fetching user playlists: {e}")
+            return []
+
+    def create_stream_playlist(
+        self,
+        name: str = "Stream Song Requests",
+        description: str = "Live song requests powered by La Forja Music"
+    ) -> Tuple[bool, str, str]:
+        """Automatically creates a new public playlist on the user's Spotify account."""
+        try:
+            me = self.sp.me()
+            user_id = me["id"]
+            new_p = self.sp.user_playlist_create(
+                user=user_id,
+                name=name,
+                public=True,
+                description=description
+            )
+            self.playlist_id = new_p["id"]
+            self._playlist_name = new_p["name"]
+            logger.info(f"Created new playlist '{name}' (ID: {self.playlist_id})")
+            return True, self.playlist_id, self._playlist_name
+        except Exception as e:
+            logger.error(f"Failed to create playlist: {e}")
+            return False, "", str(e)
 
     def get_playlist_name(self) -> str:
         """Retrieves and caches the name of the target playlist."""
+        if not self.playlist_id:
+            return "No Playlist Selected"
         if self._playlist_name:
             return self._playlist_name
         try:
@@ -295,6 +362,8 @@ class SpotifyService:
         """
         Checks if the track is already present in the most recent items of the playlist.
         """
+        if not self.playlist_id:
+            return False
         try:
             playlist_items = self.sp.playlist_items(
                 self.playlist_id,
@@ -321,6 +390,9 @@ class SpotifyService:
         Returns:
             (success: bool, user_message: str, track_info: Optional[dict])
         """
+        if not self.playlist_id:
+            return False, "Target Spotify playlist is not configured.", None
+
         track = self.search_track(query)
         if not track:
             return False, f"Could not find any song matching '{query}' on Spotify.", None

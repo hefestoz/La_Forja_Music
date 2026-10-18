@@ -26,15 +26,35 @@ class MiniApp(ctk.CTk):
         self,
         spotify_service: SpotifyService,
         request_limiter: RequestLimiter,
-        twitch_channel: str = "hefestoz",
-        tiktok_username: str = "hefestoz"
+        twitch_channel: str = "N/A",
+        tiktok_username: str = "N/A",
+        config_manager: Optional[Any] = None
     ):
         super().__init__()
 
         self.spotify = spotify_service
         self.limiter = request_limiter
-        self.twitch_channel = twitch_channel
-        self.tiktok_username = tiktok_username
+        self.config_manager = config_manager
+
+        # Fallback to config if not provided or N/A
+        enable_tw = self.config_manager.get("enable_twitch", True) if self.config_manager else True
+        enable_tt = self.config_manager.get("enable_tiktok", True) if self.config_manager else True
+
+        if not enable_tw or twitch_channel == "Disabled":
+            self.twitch_channel = "Disabled"
+        else:
+            tw_name = twitch_channel if (twitch_channel and twitch_channel != "N/A") else ""
+            if not tw_name and self.config_manager:
+                tw_name = self.config_manager.get("twitch_channel") or self.config_manager.get("twitch_nick") or ""
+            self.twitch_channel = tw_name or "N/A"
+
+        if not enable_tt or tiktok_username == "Disabled":
+            self.tiktok_username = "Disabled"
+        else:
+            tt_name = tiktok_username if (tiktok_username and tiktok_username != "N/A") else ""
+            if not tt_name and self.config_manager:
+                tt_name = self.config_manager.get("tiktok_username") or ""
+            self.tiktok_username = tt_name or "N/A"
 
         # Window settings
         self.title("La Forja Music - Stream Controller")
@@ -67,7 +87,7 @@ class MiniApp(ctk.CTk):
         self.pin_btn = ctk.CTkButton(
             header,
             text="📌 Pin",
-            width=60,
+            width=54,
             height=28,
             font=ctk.CTkFont(size=12, weight="bold"),
             fg_color="#252836",
@@ -76,25 +96,37 @@ class MiniApp(ctk.CTk):
         )
         self.pin_btn.pack(side="right")
 
+        self.settings_btn = ctk.CTkButton(
+            header,
+            text="⚙ Settings",
+            width=76,
+            height=28,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#252836",
+            hover_color="#32364a",
+            command=self._open_settings
+        )
+        self.settings_btn.pack(side="right", padx=(0, 6))
+
         # 2. Connection Status Bar
         status_bar = ctk.CTkFrame(self, fg_color="#1a1c24", corner_radius=10)
         status_bar.pack(fill="x", padx=16, pady=6)
 
         self.twitch_status = ctk.CTkLabel(
             status_bar,
-            text=f"🟣 Twitch: #{self.twitch_channel}",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color="#A970FF"
+            text="",
+            font=ctk.CTkFont(size=11, weight="bold")
         )
         self.twitch_status.pack(side="left", padx=12, pady=6)
 
         self.tiktok_status = ctk.CTkLabel(
             status_bar,
-            text=f"🔴 TikTok: @{self.tiktok_username}",
-            font=ctk.CTkFont(size=11, weight="bold"),
-            text_color="#FE2C55"
+            text="",
+            font=ctk.CTkFont(size=11, weight="bold")
         )
         self.tiktok_status.pack(side="right", padx=12, pady=6)
+
+        self._update_connection_status()
 
         # 3. Now Playing Card
         self.np_card = ctk.CTkFrame(self, fg_color="#1a1c24", corner_radius=14)
@@ -442,3 +474,52 @@ class MiniApp(ctk.CTk):
 
     def _on_clear_playlist(self):
         threading.Thread(target=self.spotify.clear_playlist, daemon=True).start()
+
+    def _update_connection_status(self):
+        enable_tw = True
+        enable_tt = True
+        if self.config_manager:
+            enable_tw = bool(self.config_manager.get("enable_twitch", True))
+            enable_tt = bool(self.config_manager.get("enable_tiktok", True))
+
+        # Twitch status
+        if not enable_tw or self.twitch_channel == "Disabled":
+            tw_text = "🟣 Twitch: (Disabled)"
+            tw_color = "#64748B"
+        elif self.twitch_channel and self.twitch_channel != "N/A":
+            tw_text = f"🟣 Twitch: #{self.twitch_channel}"
+            tw_color = "#A970FF"
+        else:
+            tw_text = "🟣 Twitch: (Not connected)"
+            tw_color = "#7A8098"
+
+        # TikTok status
+        if not enable_tt or self.tiktok_username == "Disabled":
+            tt_text = "🔴 TikTok: (Disabled)"
+            tt_color = "#64748B"
+        elif self.tiktok_username and self.tiktok_username != "N/A":
+            tt_text = f"🔴 TikTok: @{self.tiktok_username}"
+            tt_color = "#FE2C55"
+        else:
+            tt_text = "🔴 TikTok: (Not connected)"
+            tt_color = "#7A8098"
+
+        if hasattr(self, "twitch_status") and self.twitch_status:
+            self.twitch_status.configure(text=tw_text, text_color=tw_color)
+        if hasattr(self, "tiktok_status") and self.tiktok_status:
+            self.tiktok_status.configure(text=tt_text, text_color=tt_color)
+
+    def _open_settings(self):
+        from src.setup_wizard import SetupWizard
+        wizard = SetupWizard(config_manager=self.config_manager, edit_mode=True)
+        wizard.mainloop()
+
+        if self.config_manager:
+            self.config_manager.load()
+            enable_tw = self.config_manager.get("enable_twitch", True)
+            enable_tt = self.config_manager.get("enable_tiktok", True)
+            tw = (self.config_manager.get("twitch_channel") or self.config_manager.get("twitch_nick") or "N/A") if enable_tw else "Disabled"
+            tt = (self.config_manager.get("tiktok_username") or "N/A") if enable_tt else "Disabled"
+            self.twitch_channel = tw
+            self.tiktok_username = tt
+            self._update_connection_status()
