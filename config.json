@@ -1,9 +1,13 @@
 {
+  "music_platform": "spotify",
   "spotify_client_id": "21f6791ef8e94db6ac4605da54277b24",
   "spotify_client_secret": "0da62a48f8b24e588d457653488e1aed",
   "spotify_redirect_uri": "http://127.0.0.1:8888/callback",
   "spotify_playlist_id": "0A2gxbYSi2vTFDl9oTvwB2",
   "spotify_playlist_name": "Stream Playlist",
+  "youtube_initial_playlist": "",
+  "youtube_music_only": true,
+  "youtube_max_duration_seconds": 600,
   "enable_twitch": true,
   "twitch_client_id": "",
   "twitch_token": "oauth:zb3411469o75t5764j43bnor8t3qco",
