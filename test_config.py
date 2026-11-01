@@ -91,8 +91,12 @@ def test_youtube_music_platform_config():
 
     try:
         cm = ConfigManager(config_path=temp_path)
-        assert cm.get("music_platform") == "spotify"
+        assert cm.get("music_platform") == "youtube"
         assert cm.get("youtube_initial_playlist") == ""
+
+        # Switch to Spotify mode
+        cm.set("music_platform", "spotify")
+        assert cm.get("music_platform") == "spotify"
 
         # Switch to YouTube mode without any Spotify credentials
         cm.set("music_platform", "youtube")

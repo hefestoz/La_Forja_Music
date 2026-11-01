@@ -87,10 +87,32 @@ class TikTokListener:
         - display_name: human-readable profile nickname shown on OBS overlay and Spotify queue.
         """
         clean_text = comment_text.strip()
-        if not (clean_text.lower().startswith("!sr ") or clean_text.lower().startswith("!songrequest ")):
+        resolved_display = (display_name or username).strip()
+
+        # Handle !skip command
+        if clean_text.lower() == "!skip" or clean_text.lower().startswith("!skip "):
+            curr = self.spotify.get_currently_playing()
+            if not curr or not curr.get("title"):
+                logger.info(f"[TikTok SKIP] {resolved_display} tried !skip, but no song is currently playing.")
+                return
+
+            title = curr.get("title", "current song")
+            requested_by = curr.get("requested_by") or ""
+            clean_req = requested_by.replace("TikTok/", "").replace("@", "").strip().lower()
+            clean_user = username.lower().replace("@", "").strip()
+            clean_disp = resolved_display.lower().replace("@", "").strip()
+            is_broadcaster = self.limiter.is_broadcaster(username)
+            is_requester = bool(clean_req and (clean_user == clean_req or clean_disp == clean_req))
+
+            if is_requester or is_broadcaster:
+                self.spotify.next_track()
+                logger.info(f"[TikTok SKIP SUCCESS] {resolved_display} skipped '{title}' (requested by {requested_by})")
+            else:
+                logger.info(f"[TikTok SKIP DENIED] {resolved_display} tried to skip '{title}' requested by {requested_by}.")
             return
 
-        resolved_display = (display_name or username).strip()
+        if not (clean_text.lower().startswith("!sr ") or clean_text.lower().startswith("!songrequest ")):
+            return
 
         parts = clean_text.split(" ", 1)
         if len(parts) < 2 or not parts[1].strip():
@@ -127,8 +149,9 @@ class TikTokListener:
 
         if success:
             count = self.limiter.record_request("tiktok", username)
-            if self.limiter.max_songs > 0 and not self.limiter.is_broadcaster(username):
-                reply_msg += f" (Song #{count}/{self.limiter.max_songs})"
+            max_s = self.limiter.get_max_songs("tiktok")
+            if max_s > 0 and not self.limiter.is_broadcaster(username):
+                reply_msg += f" (Song #{count}/{max_s})"
             logger.info(f"[TikTok SUCCESS] {reply_msg}")
         else:
             logger.info(f"[TikTok NOTICE] {reply_msg}")

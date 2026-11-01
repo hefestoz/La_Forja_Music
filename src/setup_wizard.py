@@ -1208,32 +1208,64 @@ class BaseSetupWizard:
         )
         lbl.pack(anchor="w", padx=16, pady=(12, 8))
 
+        # Row 1: Twitch limit
         row1 = ctk.CTkFrame(card, fg_color="transparent")
         row1.pack(fill="x", padx=16, pady=(0, 6))
 
-        ctk.CTkLabel(row1, text="Max Songs Per Chatter:", font=ctk.CTkFont(size=12), text_color="#A0A5BA").pack(side="left")
+        ctk.CTkLabel(row1, text="🟣 Twitch Songs Per Chatter:", font=ctk.CTkFont(size=12), text_color="#A0A5BA").pack(side="left")
 
-        current_max = self.config.get("max_songs_per_user", 3)
-        is_unlimited = (current_max == 0)
+        current_tw = self.config.get("max_songs_per_user_twitch", self.config.get("max_songs_per_user", 3))
+        is_unlimited_tw = (current_tw == 0)
 
-        self.entry_max_songs = ctk.CTkEntry(row1, width=60)
-        display_val = "0" if is_unlimited else str(current_max)
-        self.entry_max_songs.insert(0, display_val)
-        if is_unlimited:
-            self.entry_max_songs.configure(state="disabled", fg_color="#1e2029", text_color="#64748b")
-        self.entry_max_songs.pack(side="right")
+        self.entry_max_songs_tw = ctk.CTkEntry(row1, width=60)
+        self.entry_max_songs_tw.insert(0, "0" if is_unlimited_tw else str(current_tw))
+        if is_unlimited_tw:
+            self.entry_max_songs_tw.configure(state="disabled", fg_color="#1e2029", text_color="#64748b")
+        self.entry_max_songs_tw.pack(side="right")
 
-        self.unlimited_songs_var = ctk.BooleanVar(value=is_unlimited)
-        self.chk_unlimited_songs = ctk.CTkCheckBox(
+        self.unlimited_tw_var = ctk.BooleanVar(value=is_unlimited_tw)
+        self.chk_unlimited_tw = ctk.CTkCheckBox(
             row1,
             text="Unlimited",
-            variable=self.unlimited_songs_var,
+            variable=self.unlimited_tw_var,
             font=ctk.CTkFont(size=11),
             text_color="#10B981",
-            command=self._on_unlimited_toggle
+            command=self._on_unlimited_tw_toggle
         )
-        self.chk_unlimited_songs.pack(side="right", padx=(0, 10))
+        self.chk_unlimited_tw.pack(side="right", padx=(0, 10))
 
+        # Backward compatibility aliases
+        self.entry_max_songs = self.entry_max_songs_tw
+        self.unlimited_songs_var = self.unlimited_tw_var
+        self.chk_unlimited_songs = self.chk_unlimited_tw
+
+        # Row 2: TikTok limit
+        row_tt = ctk.CTkFrame(card, fg_color="transparent")
+        row_tt.pack(fill="x", padx=16, pady=(0, 6))
+
+        ctk.CTkLabel(row_tt, text="🔴 TikTok Songs Per Chatter:", font=ctk.CTkFont(size=12), text_color="#A0A5BA").pack(side="left")
+
+        current_tt = self.config.get("max_songs_per_user_tiktok", self.config.get("max_songs_per_user", 3))
+        is_unlimited_tt = (current_tt == 0)
+
+        self.entry_max_songs_tt = ctk.CTkEntry(row_tt, width=60)
+        self.entry_max_songs_tt.insert(0, "0" if is_unlimited_tt else str(current_tt))
+        if is_unlimited_tt:
+            self.entry_max_songs_tt.configure(state="disabled", fg_color="#1e2029", text_color="#64748b")
+        self.entry_max_songs_tt.pack(side="right")
+
+        self.unlimited_tt_var = ctk.BooleanVar(value=is_unlimited_tt)
+        self.chk_unlimited_tt = ctk.CTkCheckBox(
+            row_tt,
+            text="Unlimited",
+            variable=self.unlimited_tt_var,
+            font=ctk.CTkFont(size=11),
+            text_color="#10B981",
+            command=self._on_unlimited_tt_toggle
+        )
+        self.chk_unlimited_tt.pack(side="right", padx=(0, 10))
+
+        # Row 3: Cooldown
         row2 = ctk.CTkFrame(card, fg_color="transparent")
         row2.pack(fill="x", padx=16, pady=(0, 6))
 
@@ -1242,6 +1274,7 @@ class BaseSetupWizard:
         self.entry_cooldown.insert(0, str(self.config.get("cooldown_seconds", 10)))
         self.entry_cooldown.pack(side="right")
 
+        # Row 4: Quota duration mode
         row3 = ctk.CTkFrame(card, fg_color="transparent")
         row3.pack(fill="x", padx=16, pady=(0, 12))
 
@@ -1256,21 +1289,36 @@ class BaseSetupWizard:
         )
         self.mode_dropdown.pack(side="right")
 
-    def _on_unlimited_toggle(self):
-        if self.unlimited_songs_var.get():
-            self.entry_max_songs.configure(state="normal")
-            self.entry_max_songs.delete(0, "end")
-            self.entry_max_songs.insert(0, "0")
-            self.entry_max_songs.configure(state="disabled", fg_color="#1e2029", text_color="#64748b")
+    def _on_unlimited_tw_toggle(self):
+        if self.unlimited_tw_var.get():
+            self.entry_max_songs_tw.configure(state="normal")
+            self.entry_max_songs_tw.delete(0, "end")
+            self.entry_max_songs_tw.insert(0, "0")
+            self.entry_max_songs_tw.configure(state="disabled", fg_color="#1e2029", text_color="#64748b")
         else:
-            self.entry_max_songs.configure(state="normal", fg_color=["#F9F9FA", "#343638"], text_color=["#000000", "#FFFFFF"])
-            self.entry_max_songs.delete(0, "end")
-            self.entry_max_songs.insert(0, "3")
+            self.entry_max_songs_tw.configure(state="normal", fg_color=["#F9F9FA", "#343638"], text_color=["#000000", "#FFFFFF"])
+            self.entry_max_songs_tw.delete(0, "end")
+            self.entry_max_songs_tw.insert(0, "3")
+
+    def _on_unlimited_tt_toggle(self):
+        if self.unlimited_tt_var.get():
+            self.entry_max_songs_tt.configure(state="normal")
+            self.entry_max_songs_tt.delete(0, "end")
+            self.entry_max_songs_tt.insert(0, "0")
+            self.entry_max_songs_tt.configure(state="disabled", fg_color="#1e2029", text_color="#64748b")
+        else:
+            self.entry_max_songs_tt.configure(state="normal", fg_color=["#F9F9FA", "#343638"], text_color=["#000000", "#FFFFFF"])
+            self.entry_max_songs_tt.delete(0, "end")
+            self.entry_max_songs_tt.insert(0, "3")
+
+    def _on_unlimited_toggle(self):
+        self._on_unlimited_tw_toggle()
 
     # ------------------------------------------------------------------
     # Card 4: OBS Overlay
     # ------------------------------------------------------------------
     def _build_obs_card(self):
+        from src.overlay_server import get_local_lan_ip
         card = ctk.CTkFrame(self.scroll, fg_color="#181a22", corner_radius=14)
         card.pack(fill="x", pady=8)
 
@@ -1283,6 +1331,8 @@ class BaseSetupWizard:
         lbl.pack(anchor="w", padx=16, pady=(12, 6))
 
         port = self.config.get("overlay_port", 5000)
+        lan_ip = get_local_lan_ip()
+
         lbl_hint = ctk.CTkLabel(
             card,
             text="Add a 'Browser Source' in OBS with the URL below (340x500 px):",
@@ -1291,11 +1341,15 @@ class BaseSetupWizard:
         )
         lbl_hint.pack(anchor="w", padx=16, pady=(0, 4))
 
-        row = ctk.CTkFrame(card, fg_color="transparent")
-        row.pack(fill="x", padx=16, pady=(0, 12))
+        # Local URL row
+        row_local = ctk.CTkFrame(card, fg_color="transparent")
+        row_local.pack(fill="x", padx=16, pady=(0, 6))
+
+        lbl_local_desc = ctk.CTkLabel(row_local, text="Local (Same PC):", font=ctk.CTkFont(size=11), text_color="#94A3B8")
+        lbl_local_desc.pack(side="left", padx=(0, 8))
 
         lbl_obs_val = ctk.CTkLabel(
-            row,
+            row_local,
             text=f"http://127.0.0.1:{port}/overlay",
             font=ctk.CTkFont(size=12, weight="bold"),
             text_color="#FF75C3"
@@ -1303,17 +1357,42 @@ class BaseSetupWizard:
         lbl_obs_val.pack(side="left")
 
         btn_copy = ctk.CTkButton(
-            row,
-            text="📋 Copy URL",
+            row_local,
+            text="📋 Copy Local",
             width=100,
             fg_color="#252836",
             hover_color="#32364a",
-            command=lambda: self._copy_obs_url(port)
+            command=lambda: self._copy_obs_url(f"http://127.0.0.1:{port}/overlay")
         )
         btn_copy.pack(side="right")
 
-    def _copy_obs_url(self, port: int):
-        url = f"http://127.0.0.1:{port}/overlay"
+        # LAN URL row (for Dual-PC / Remote OBS setups)
+        if lan_ip and lan_ip != "127.0.0.1":
+            row_lan = ctk.CTkFrame(card, fg_color="transparent")
+            row_lan.pack(fill="x", padx=16, pady=(0, 12))
+
+            lbl_lan_desc = ctk.CTkLabel(row_lan, text="LAN / 2nd PC:", font=ctk.CTkFont(size=11), text_color="#94A3B8")
+            lbl_lan_desc.pack(side="left", padx=(0, 8))
+
+            lbl_lan_val = ctk.CTkLabel(
+                row_lan,
+                text=f"http://{lan_ip}:{port}/overlay",
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color="#38BDF8"
+            )
+            lbl_lan_val.pack(side="left")
+
+            btn_copy_lan = ctk.CTkButton(
+                row_lan,
+                text="📋 Copy LAN",
+                width=100,
+                fg_color="#252836",
+                hover_color="#32364a",
+                command=lambda: self._copy_obs_url(f"http://{lan_ip}:{port}/overlay")
+            )
+            btn_copy_lan.pack(side="right")
+
+    def _copy_obs_url(self, url: str):
         self.clipboard_clear()
         self.clipboard_append(url)
         self._show_success("OBS Overlay URL copied to clipboard!")
@@ -1519,13 +1598,27 @@ class BaseSetupWizard:
         csecret = self.entry_client_secret.get().strip() or self.config.get("spotify_client_secret")
         tw_cid = self.entry_twitch_client_id.get().strip() or self.config.get("twitch_client_id")
 
-        if self.unlimited_songs_var.get():
-            max_songs = 0
-        else:
+        if hasattr(self, "unlimited_tw_var") and self.unlimited_tw_var.get():
+            max_songs_tw = 0
+        elif hasattr(self, "entry_max_songs_tw"):
             try:
-                max_songs = int(self.entry_max_songs.get().strip())
+                max_songs_tw = int(self.entry_max_songs_tw.get().strip())
             except ValueError:
-                max_songs = 3
+                max_songs_tw = 3
+        else:
+            max_songs_tw = 3
+
+        if hasattr(self, "unlimited_tt_var") and self.unlimited_tt_var.get():
+            max_songs_tt = 0
+        elif hasattr(self, "entry_max_songs_tt"):
+            try:
+                max_songs_tt = int(self.entry_max_songs_tt.get().strip())
+            except ValueError:
+                max_songs_tt = 3
+        else:
+            max_songs_tt = 3
+
+        max_songs = max_songs_tw
 
         try:
             cooldown = int(self.entry_cooldown.get().strip())
@@ -1568,6 +1661,8 @@ class BaseSetupWizard:
             self.config.set("twitch_nick", self.config.get("twitch_nick") or tw_chan)
         self.config.set("tiktok_username", tt_user)
         self.config.set("max_songs_per_user", max_songs)
+        self.config.set("max_songs_per_user_twitch", max_songs_tw)
+        self.config.set("max_songs_per_user_tiktok", max_songs_tt)
         self.config.set("cooldown_seconds", cooldown)
         self.config.set("user_limit_window_minutes", window_mins)
 

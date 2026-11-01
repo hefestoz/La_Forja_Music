@@ -106,10 +106,47 @@ class TwitchBot:
 
         if success:
             count = self.limiter.record_request("twitch", username)
-            if self.limiter.max_songs > 0 and not self.limiter.is_broadcaster(username):
-                reply_msg += f" (Song #{count}/{self.limiter.max_songs})"
+            max_s = self.limiter.get_max_songs("twitch")
+            if max_s > 0 and not self.limiter.is_broadcaster(username):
+                reply_msg += f" (Song #{count}/{max_s})"
 
         await self.send_chat_message(f"@{username} {reply_msg}")
+
+    async def handle_skip_request(self, sender: str) -> None:
+        """
+        Processes a !skip command.
+        Only the original requester of the currently playing song (or broadcaster) can skip it.
+        """
+        curr = self.spotify.get_currently_playing()
+        if not curr or not curr.get("title"):
+            await self.send_chat_message(f"@{sender} No song is currently playing.")
+            return
+
+        title = curr.get("title", "current song")
+        artist = curr.get("artist_str", "")
+        track_desc = f"'{title}' by {artist}" if artist else f"'{title}'"
+        requested_by = curr.get("requested_by")
+
+        if not requested_by:
+            if sender.lower() == self.channel.lower():
+                self.spotify.next_track()
+                await self.send_chat_message(f"@{sender} Broadcaster skipped {track_desc}.")
+            else:
+                await self.send_chat_message(f"@{sender} The currently playing song was not requested by a viewer and cannot be skipped.")
+            return
+
+        clean_req = requested_by.replace("Twitch/", "").strip().lower()
+        is_requester = (sender.lower() == clean_req)
+        is_broadcaster = (sender.lower() == self.channel.lower())
+
+        if is_requester or is_broadcaster:
+            self.spotify.next_track()
+            if is_broadcaster and not is_requester:
+                await self.send_chat_message(f"@{sender} Broadcaster skipped {track_desc} (requested by @{requested_by}).")
+            else:
+                await self.send_chat_message(f"@{sender} Skipped your song {track_desc}!")
+        else:
+            await self.send_chat_message(f"@{sender} Only @{requested_by} (the requester) can skip this song.")
 
     async def start(self) -> None:
         """Main loop that connects to Twitch WebSocket with automatic reconnection."""
@@ -156,13 +193,18 @@ class TwitchBot:
                             # Query current user requests
                             if clean_content.lower() in ("!myrequests", "!requests"):
                                 count = self.limiter.get_user_count("twitch", sender)
-                                max_s = self.limiter.max_songs
+                                max_s = self.limiter.get_max_songs("twitch")
                                 if self.limiter.is_broadcaster(sender):
                                     await self.send_chat_message(f"@{sender} You are the broadcaster (unlimited requests).")
                                 elif max_s > 0:
-                                    await self.send_chat_message(f"@{sender} You have requested {count}/{max_s} songs.")
+                                    await self.send_chat_message(f"@{sender} You have requested {count}/{max_s} songs on Twitch.")
                                 else:
                                     await self.send_chat_message(f"@{sender} Song requests are currently unlimited!")
+                                continue
+
+                            # Skip command: only original requester or broadcaster can skip
+                            if clean_content.lower() == "!skip" or clean_content.lower().startswith("!skip "):
+                                asyncio.create_task(self.handle_skip_request(sender))
                                 continue
 
                             # Check for !sr or !songrequest command
@@ -172,7 +214,7 @@ class TwitchBot:
                                     query = parts[1].strip()
                                     asyncio.create_task(self.handle_song_request(sender, query))
                                 else:
-                                    await self.send_chat_message(f"@{sender} Usage: !sr <song title, artist, or Spotify link>")
+                                    await self.send_chat_message(f"@{sender} Usage: !sr <song title, artist, or YouTube/Spotify link>")
 
             except asyncio.CancelledError:
                 logger.info("[Twitch] Listener cancelled.")

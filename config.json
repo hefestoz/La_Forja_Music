@@ -16,6 +16,8 @@
   "enable_tiktok": true,
   "tiktok_username": "hefestoz",
   "max_songs_per_user": 0,
+  "max_songs_per_user_twitch": 0,
+  "max_songs_per_user_tiktok": 0,
   "user_limit_window_minutes": 0,
   "cooldown_seconds": 10,
   "overlay_port": 5000,

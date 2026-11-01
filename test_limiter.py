@@ -78,6 +78,37 @@ def test_unlimited_mode():
         limiter.record_request("twitch", "regular_chatter")
     print("  [OK] Regular chatter made 10 requests without being blocked under Unlimited mode")
 
+def test_separate_platform_limits():
+    print("\nTesting Separate Platform Limits (Twitch vs TikTok)...")
+    limiter = RequestLimiter(
+        max_songs_per_user=3,
+        max_songs_twitch=2,
+        max_songs_tiktok=4,
+        window_minutes=0,
+        broadcaster_username="hefestoz"
+    )
+
+    user = "cross_platform_user"
+
+    # Twitch: 2 allowed, 3rd blocked
+    assert limiter.can_request("twitch", user)[0]
+    limiter.record_request("twitch", user)
+    assert limiter.can_request("twitch", user)[0]
+    limiter.record_request("twitch", user)
+    allowed_tw, msg_tw = limiter.can_request("twitch", user)
+    assert not allowed_tw, "Twitch 3rd request should be blocked (limit 2)"
+    assert "Twitch limit of 2" in msg_tw
+    print("  [OK] Twitch quota of 2 enforced")
+
+    # TikTok: 4 allowed, 5th blocked
+    for i in range(4):
+        assert limiter.can_request("tiktok", user)[0], f"TikTok request {i+1} should be allowed"
+        limiter.record_request("tiktok", user)
+    allowed_tt, msg_tt = limiter.can_request("tiktok", user)
+    assert not allowed_tt, "TikTok 5th request should be blocked (limit 4)"
+    assert "Tiktok limit of 4" in msg_tt or "TikTok limit of 4" in msg_tt
+    print("  [OK] TikTok quota of 4 enforced independently")
+
 if __name__ == "__main__":
     print("========================================")
     print(" Running Request Limiter Unit Tests")
@@ -87,4 +118,5 @@ if __name__ == "__main__":
     test_rolling_window()
     test_reset_limits()
     test_unlimited_mode()
+    test_separate_platform_limits()
     print("\n[SUCCESS] ALL REQUEST LIMITER TESTS PASSED!")

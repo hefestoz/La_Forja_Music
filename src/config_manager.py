@@ -33,6 +33,8 @@ class ConfigManager:
         "enable_tiktok": True,
         "tiktok_username": "",
         "max_songs_per_user": 3,
+        "max_songs_per_user_twitch": 3,
+        "max_songs_per_user_tiktok": 3,
         "user_limit_window_minutes": 0,
         "cooldown_seconds": 10,
         "overlay_port": 5000,
@@ -84,6 +86,24 @@ class ConfigManager:
                 self._config["max_songs_per_user"] = int(os.getenv("MAX_SONGS_PER_USER"))
             except ValueError:
                 pass
+
+        if "max_songs_per_user_twitch" not in loaded_data:
+            if os.getenv("MAX_SONGS_PER_USER_TWITCH"):
+                try:
+                    self._config["max_songs_per_user_twitch"] = int(os.getenv("MAX_SONGS_PER_USER_TWITCH"))
+                except ValueError:
+                    self._config["max_songs_per_user_twitch"] = self._config.get("max_songs_per_user", 3)
+            else:
+                self._config["max_songs_per_user_twitch"] = self._config.get("max_songs_per_user", 3)
+
+        if "max_songs_per_user_tiktok" not in loaded_data:
+            if os.getenv("MAX_SONGS_PER_USER_TIKTOK"):
+                try:
+                    self._config["max_songs_per_user_tiktok"] = int(os.getenv("MAX_SONGS_PER_USER_TIKTOK"))
+                except ValueError:
+                    self._config["max_songs_per_user_tiktok"] = self._config.get("max_songs_per_user", 3)
+            else:
+                self._config["max_songs_per_user_tiktok"] = self._config.get("max_songs_per_user", 3)
 
         if "user_limit_window_minutes" not in loaded_data and os.getenv("USER_LIMIT_WINDOW_MINUTES"):
             try:

@@ -61,10 +61,19 @@ class BotManager:
         enable_tt = self.config.get("enable_tiktok", True)
         broadcaster = (tw_chan if enable_tw else "") or (tt_user if enable_tt else "")
 
+        max_tw = self.config.get("max_songs_per_user_twitch")
+        if max_tw is None:
+            max_tw = self.config.get("max_songs_per_user", 3)
+        max_tt = self.config.get("max_songs_per_user_tiktok")
+        if max_tt is None:
+            max_tt = self.config.get("max_songs_per_user", 3)
+
         self.limiter = RequestLimiter(
-            max_songs_per_user=self.config.get("max_songs_per_user"),
-            window_minutes=self.config.get("user_limit_window_minutes"),
-            broadcaster_username=broadcaster
+            max_songs_per_user=self.config.get("max_songs_per_user", 3),
+            window_minutes=self.config.get("user_limit_window_minutes", 0),
+            broadcaster_username=broadcaster,
+            max_songs_twitch=max_tw,
+            max_songs_tiktok=max_tt
         )
 
         # 2. Music Service (Spotify or YouTube)
@@ -228,13 +237,12 @@ def print_banner(manager: BotManager):
     print("==========================================================")
     
     lim = manager.limiter
-    if lim.max_songs <= 0:
-        desc = "Unlimited"
-    elif lim.window_minutes > 0:
-        desc = f"Max {lim.max_songs} songs per {lim.window_minutes} minutes"
-    else:
-        desc = f"Max {lim.max_songs} songs per stream session"
-    print(f"[OK] Quota Policy        -> {desc}")
+    tw_limit = lim.get_max_songs("twitch")
+    tt_limit = lim.get_max_songs("tiktok")
+    tw_desc = "Unlimited" if tw_limit <= 0 else f"Max {tw_limit} songs"
+    tt_desc = "Unlimited" if tt_limit <= 0 else f"Max {tt_limit} songs"
+    win_str = f" per {lim.window_minutes}m" if lim.window_minutes > 0 else " per stream session"
+    print(f"[OK] Quota Policy        -> Twitch: {tw_desc}{win_str} | TikTok: {tt_desc}{win_str}")
 
     if getattr(manager.spotify, "service_type", "spotify") == "youtube":
         print(f"[OK] Music Backend       -> YouTube In-App Player (No-Login Mode)")
@@ -252,12 +260,17 @@ def print_banner(manager: BotManager):
     else:
         print(f"[--] TikTok Integration  -> Disabled")
     if manager.overlay_server:
-        print(f"[OK] OBS Browser Source  -> http://localhost:5000/overlay")
+        port = manager.overlay_server.port
+        lan_ip = getattr(manager.overlay_server, "lan_ip", "127.0.0.1")
+        print(f"[OK] OBS Browser Source  -> http://localhost:{port}/overlay (or http://127.0.0.1:{port}/overlay)")
+        if lan_ip and lan_ip != "127.0.0.1":
+            print(f"                            http://{lan_ip}:{port}/overlay (For Remote/Dual-PC OBS)")
 
     print("\n----------------------------------------------------------")
     print(" Active Commands in Chat:")
-    print("   !sr <song title, artist, or Spotify link>")
-    print("   !songrequest <song title, artist, or Spotify link>")
+    print("   !sr <song title, artist, or YouTube/Spotify link>")
+    print("   !songrequest <song title, artist, or link>")
+    print("   !skip (requester only: skip your currently playing song)")
     print("   !myrequests (check your quota)")
     print("   !resetrequests (broadcaster: reset all quotas)")
     print("----------------------------------------------------------\n")

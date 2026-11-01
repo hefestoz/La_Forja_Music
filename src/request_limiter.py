@@ -22,12 +22,35 @@ class RequestLimiter:
         self,
         max_songs_per_user: Optional[int] = None,
         window_minutes: Optional[int] = None,
-        broadcaster_username: Optional[str] = None
+        broadcaster_username: Optional[str] = None,
+        max_songs_twitch: Optional[int] = None,
+        max_songs_tiktok: Optional[int] = None
     ):
         if max_songs_per_user is not None:
             self.max_songs = max_songs_per_user
         else:
             self.max_songs = int(os.getenv("MAX_SONGS_PER_USER", "3"))
+
+        # Platform-specific limits (fallback to self.max_songs if not specified)
+        if max_songs_twitch is not None:
+            self.max_songs_twitch = max_songs_twitch
+        elif os.getenv("MAX_SONGS_PER_USER_TWITCH"):
+            try:
+                self.max_songs_twitch = int(os.getenv("MAX_SONGS_PER_USER_TWITCH"))
+            except ValueError:
+                self.max_songs_twitch = self.max_songs
+        else:
+            self.max_songs_twitch = self.max_songs
+
+        if max_songs_tiktok is not None:
+            self.max_songs_tiktok = max_songs_tiktok
+        elif os.getenv("MAX_SONGS_PER_USER_TIKTOK"):
+            try:
+                self.max_songs_tiktok = int(os.getenv("MAX_SONGS_PER_USER_TIKTOK"))
+            except ValueError:
+                self.max_songs_tiktok = self.max_songs
+        else:
+            self.max_songs_tiktok = self.max_songs
 
         if window_minutes is not None:
             self.window_minutes = window_minutes
@@ -40,6 +63,15 @@ class RequestLimiter:
         # Storage: key -> list of float timestamps of successful requests
         # key format: "platform:username" (e.g. "twitch:viewer1", "tiktok:viewer2")
         self._history: Dict[str, List[float]] = defaultdict(list)
+
+    def get_max_songs(self, platform: str) -> int:
+        """Returns the configured max songs limit for a specific platform."""
+        plat = platform.lower()
+        if plat == "twitch" and self.max_songs_twitch is not None:
+            return self.max_songs_twitch
+        elif plat == "tiktok" and self.max_songs_tiktok is not None:
+            return self.max_songs_tiktok
+        return self.max_songs
 
     @staticmethod
     def _make_key(platform: str, username: str) -> str:
@@ -56,8 +88,10 @@ class RequestLimiter:
         Returns:
             (allowed: bool, reason_message: str)
         """
+        limit = self.get_max_songs(platform)
+
         # 0 or negative means unlimited
-        if self.max_songs <= 0:
+        if limit <= 0:
             return True, ""
 
         # Broadcaster is always exempt
@@ -67,6 +101,7 @@ class RequestLimiter:
         key = self._make_key(platform, username)
         now = time.time()
         timestamps = self._history[key]
+        plat_label = platform.capitalize()
 
         # Mode 1: Rolling time window (window_minutes > 0)
         if self.window_minutes > 0:
@@ -75,20 +110,20 @@ class RequestLimiter:
             valid_timestamps = [ts for ts in timestamps if ts > cutoff]
             self._history[key] = valid_timestamps
 
-            if len(valid_timestamps) >= self.max_songs:
+            if len(valid_timestamps) >= limit:
                 # Time until the oldest request falls outside the window
                 oldest = valid_timestamps[0]
                 remaining_seconds = int((oldest + (self.window_minutes * 60)) - now)
                 remaining_minutes = max(1, math.ceil(remaining_seconds / 60))
                 return False, (
-                    f"You have reached your limit of {self.max_songs} song(s) per {self.window_minutes}m. "
+                    f"You have reached your {plat_label} limit of {limit} song(s) per {self.window_minutes}m. "
                     f"You can request again in ~{remaining_minutes} min."
                 )
 
         # Mode 2: Per stream / session (window_minutes == 0)
         else:
-            if len(timestamps) >= self.max_songs:
-                return False, f"You have reached your limit of {self.max_songs} song(s) for this stream!"
+            if len(timestamps) >= limit:
+                return False, f"You have reached your {plat_label} limit of {limit} song(s) for this stream!"
 
         return True, ""
 
@@ -103,7 +138,9 @@ class RequestLimiter:
         key = self._make_key(platform, username)
         self._history[key].append(time.time())
         current_count = len(self._history[key])
-        logger.info(f"Recorded request for {key} (total: {current_count}/{self.max_songs if self.max_songs > 0 else 'unlimited'})")
+        limit = self.get_max_songs(platform)
+        limit_desc = str(limit) if limit > 0 else "unlimited"
+        logger.info(f"Recorded request for {key} (total: {current_count}/{limit_desc})")
         return current_count
 
     def get_user_count(self, platform: str, username: str) -> int:
