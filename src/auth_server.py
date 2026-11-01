@@ -73,24 +73,24 @@ SUCCESS_HTML = """<!DOCTYPE html>
       if (window.location.hash && window.location.hash.length > 1) {
         const hash = window.location.hash.substring(1);
         const params = new URLSearchParams(hash);
-        const accessToken = params.get('access_token');
-        if (accessToken) {
-          const statusElem = document.getElementById('status-msg');
-          const titleElem = document.getElementById('title-msg');
-          const iconElem = document.getElementById('card-icon');
-          if (statusElem) statusElem.innerText = "Transmitting Twitch credentials to La Forja Music...";
+        const access_token = params.get('access_token');
+        if (access_token) {
+          const status_elem = document.getElementById('status-msg');
+          const title_elem = document.getElementById('title-msg');
+          const icon_elem = document.getElementById('card-icon');
+          if (status_elem) status_elem.innerText = "Transmitting Twitch credentials to La Forja Music...";
 
-          fetch('/callback/twitch?token=' + encodeURIComponent(accessToken))
+          fetch('/callback/twitch?token=' + encodeURIComponent(access_token))
             .then(res => res.json())
             .then(data => {
               if (data && data.status === 'ok') {
-                if (iconElem) iconElem.innerText = "🟣";
-                if (titleElem) {
-                  titleElem.innerText = "Twitch Connected!";
-                  titleElem.style.color = "#9146FF";
+                if (icon_elem) icon_elem.innerText = "🟣";
+                if (title_elem) {
+                  title_elem.innerText = "Twitch Connected!";
+                  title_elem.style.color = "#9146FF";
                 }
-                if (statusElem) {
-                  statusElem.innerHTML = "Linked Twitch channel: <strong>@" + (data.login || 'streamer') + "</strong>.<br>You can safely close this window.";
+                if (status_elem) {
+                  status_elem.innerHTML = "Linked Twitch channel: <strong>@" + (data.login || 'streamer') + "</strong>.<br>You can safely close this window.";
                 }
               }
             })

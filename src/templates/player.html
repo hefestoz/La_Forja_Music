@@ -113,7 +113,7 @@
   <div id="player-container">
     <div class="badge">🔴 IN-APP PLAYER</div>
     <div id="status-bar" class="status-text">● Ready</div>
-    <div id="unmute-banner" onclick="handleUserUnmute()">🔊 Tap to Unmute Audio</div>
+    <div id="unmute-banner" onclick="handle_user_unmute()">🔊 Tap to Unmute Audio</div>
     
     <div id="idle-screen">
       <div class="idle-logo">🎧</div>
@@ -126,24 +126,24 @@
 
   <script src="https://www.youtube.com/iframe_api"></script>
   <script>
-    const urlParams = new URLSearchParams(window.location.search);
-    const initialVid = urlParams.get('v') || null;
+    const url_params = new URLSearchParams(window.location.search);
+    const initial_vid = url_params.get('v') || null;
 
     let player = null;
-    let isApiReady = false;
-    let activeVideoId = initialVid;
-    let lastVolume = 100;
-    let isAdvancing = false;
+    let is_api_ready = false;
+    let active_video_id = initial_vid;
+    let last_volume = 100;
+    let is_advancing = false;
 
-    if (initialVid) {
+    if (initial_vid) {
       const idle = document.getElementById('idle-screen');
       if (idle) idle.style.display = 'none';
     }
 
-    function handleUserUnmute() {
+    function handle_user_unmute() {
       if (player && typeof player.unMute === 'function') {
         player.unMute();
-        player.setVolume(lastVolume || 100);
+        player.setVolume(last_volume || 100);
         player.playVideo();
       }
       const banner = document.getElementById('unmute-banner');
@@ -151,7 +151,7 @@
     }
 
     document.addEventListener('click', () => {
-      handleUserUnmute();
+      handle_user_unmute();
     });
 
     function onYouTubeIframeAPIReady() {
@@ -170,42 +170,42 @@
           'iv_load_policy': 3
         },
         events: {
-          'onReady': onPlayerReady,
-          'onStateChange': onPlayerStateChange,
-          'onError': onPlayerError
+          'onReady': on_player_ready,
+          'onStateChange': on_player_state_change,
+          'onError': on_player_error
         }
       };
 
-      if (initialVid) {
-        config.videoId = initialVid;
+      if (initial_vid) {
+        config.videoId = initial_vid;
       }
 
       player = new YT.Player('yt-player', config);
     }
 
-    function onPlayerReady(event) {
-      isApiReady = true;
+    function on_player_ready(event) {
+      is_api_ready = true;
       document.getElementById('status-bar').innerText = '● Connected';
-      if (activeVideoId) {
+      if (active_video_id) {
         const idle = document.getElementById('idle-screen');
         if (idle) idle.style.display = 'none';
         try {
           if (event && event.target && event.target.playVideo) {
             event.target.unMute();
-            event.target.setVolume(lastVolume || 100);
+            event.target.setVolume(last_volume || 100);
             event.target.playVideo();
           } else {
-            loadAndPlay(activeVideoId);
+            load_and_play(active_video_id);
           }
         } catch (e) {
-          loadAndPlay(activeVideoId);
+          load_and_play(active_video_id);
         }
       }
     }
 
-    function onPlayerStateChange(event) {
+    function on_player_state_change(event) {
       if (event.data === YT.PlayerState.ENDED) {
-        notifyEnded();
+        notify_ended();
       } else if (event.data === YT.PlayerState.PLAYING) {
         const idle = document.getElementById('idle-screen');
         if (idle) idle.style.display = 'none';
@@ -219,12 +219,12 @@
       }
     }
 
-    function onPlayerError(event) {
+    function on_player_error(event) {
       console.warn("YouTube player error:", event.data);
       // Only advance queue on definitive restriction errors (101 / 150: embedding restricted by owner)
       if (event.data === 150 || event.data === 101) {
         document.getElementById('status-bar').innerText = '⚠ Embedding restricted by owner - Skipping...';
-        setTimeout(notifyEnded, 3000);
+        setTimeout(notify_ended, 3000);
       } else {
         document.getElementById('status-bar').innerText = '⚠ Buffering / Retrying...';
         if (player && typeof player.playVideo === 'function') {
@@ -235,30 +235,30 @@
       }
     }
 
-    function notifyEnded() {
-      if (isAdvancing) return;
-      isAdvancing = true;
+    function notify_ended() {
+      if (is_advancing) return;
+      is_advancing = true;
       document.getElementById('status-bar').innerText = '⏭ Next Song...';
 
       fetch('/api/player/ended', { method: 'POST' })
         .then(res => res.json())
         .then(data => {
-          isAdvancing = false;
+          is_advancing = false;
           if (data && data.current_track && data.current_track.id) {
-            loadAndPlay(data.current_track.id);
+            load_and_play(data.current_track.id);
           } else {
-            showIdle();
+            show_idle();
           }
         })
         .catch(err => {
-          isAdvancing = false;
+          is_advancing = false;
           console.error("Error advancing queue:", err);
         });
     }
 
-    function loadAndPlay(vid) {
+    function load_and_play(vid) {
       if (!vid) return;
-      activeVideoId = vid;
+      active_video_id = vid;
       const idle = document.getElementById('idle-screen');
       if (idle) idle.style.display = 'none';
       if (player && player.loadVideoById) {
@@ -267,7 +267,7 @@
           if (typeof player.unMute === 'function') {
             player.unMute();
           }
-          player.setVolume(lastVolume || 100);
+          player.setVolume(last_volume || 100);
           player.playVideo();
         } catch (e) {
           console.warn("Error in loadVideoById:", e);
@@ -275,8 +275,8 @@
       }
     }
 
-    function showIdle() {
-      activeVideoId = null;
+    function show_idle() {
+      active_video_id = null;
       const idle = document.getElementById('idle-screen');
       if (idle) idle.style.display = 'flex';
       document.getElementById('status-bar').innerText = '● Idle';
@@ -285,16 +285,16 @@
       }
     }
 
-    async function syncState() {
+    async function sync_state() {
       try {
         const resp = await fetch('/api/now-playing');
         if (resp.ok) {
           const track = await resp.json();
           if (track && track.id) {
-            if (track.id !== activeVideoId && !isAdvancing) {
-              loadAndPlay(track.id);
+            if (track.id !== active_video_id && !is_advancing) {
+              load_and_play(track.id);
             }
-            if (player && isApiReady) {
+            if (player && is_api_ready) {
               // Sync play / pause
               if (track.is_playing === false && player.getPlayerState() === YT.PlayerState.PLAYING) {
                 player.pauseVideo();
@@ -303,9 +303,9 @@
               }
 
               // Sync volume
-              if (track.volume_percent !== undefined && track.volume_percent !== lastVolume) {
-                lastVolume = track.volume_percent;
-                player.setVolume(lastVolume);
+              if (track.volume_percent !== undefined && track.volume_percent !== last_volume) {
+                last_volume = track.volume_percent;
+                player.setVolume(last_volume);
               }
 
               // Report progress back
@@ -325,8 +325,8 @@
               }
             }
           } else {
-            if (activeVideoId && !isAdvancing) {
-              showIdle();
+            if (active_video_id && !is_advancing) {
+              show_idle();
             }
           }
         }
@@ -335,7 +335,7 @@
       }
     }
 
-    setInterval(syncState, 1000);
+    setInterval(sync_state, 1000);
   </script>
 </body>
 </html>

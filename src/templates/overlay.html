@@ -190,22 +190,22 @@
 
   <div class="widget-container" id="widget">
     <div class="art-wrapper">
-      <img id="albumArt" class="art-img" src="" alt="Album Art">
+      <img id="album_art" class="art-img" src="" alt="Album Art">
     </div>
 
     <div class="track-details">
       <div class="title-row">
-        <span id="trackTitle" class="track-title">Loading...</span>
+        <span id="track_title" class="track-title">Loading...</span>
       </div>
-      <span id="trackArtist" class="track-artist">Connecting to Spotify</span>
+      <span id="track_artist" class="track-artist">Connecting to Spotify</span>
 
-      <div id="requesterBadge" class="requester-badge" style="display: none;"></div>
+      <div id="requester_badge" class="requester-badge" style="display: none;"></div>
 
       <div class="progress-bar-wrap">
         <div class="progress-track">
-          <div id="progressFill" class="progress-fill"></div>
+          <div id="progress_fill" class="progress-fill"></div>
         </div>
-        <span id="timeLabel" class="time-label">0:00</span>
+        <span id="time_label" class="time-label">0:00</span>
       </div>
     </div>
 
@@ -219,27 +219,27 @@
 
   <script>
     const widget = document.getElementById('widget');
-    const albumArt = document.getElementById('albumArt');
-    const trackTitle = document.getElementById('trackTitle');
-    const trackArtist = document.getElementById('trackArtist');
-    const requesterBadge = document.getElementById('requesterBadge');
-    const progressFill = document.getElementById('progressFill');
-    const timeLabel = document.getElementById('timeLabel');
+    const album_art = document.getElementById('album_art');
+    const track_title = document.getElementById('track_title');
+    const track_artist = document.getElementById('track_artist');
+    const requester_badge = document.getElementById('requester_badge');
+    const progress_fill = document.getElementById('progress_fill');
+    const time_label = document.getElementById('time_label');
     const equalizer = document.getElementById('equalizer');
 
-    let currentProgressMs = 0;
-    let currentDurationMs = 0;
-    let isPlaying = false;
-    let lastFetchTime = Date.now();
+    let current_progress_ms = 0;
+    let current_duration_ms = 0;
+    let is_playing = false;
+    let last_fetch_time = Date.now();
 
-    function formatTime(ms) {
-      const totalSec = Math.floor(ms / 1000);
-      const min = Math.floor(totalSec / 60);
-      const sec = totalSec % 60;
+    function format_time(ms) {
+      const total_sec = Math.floor(ms / 1000);
+      const min = Math.floor(total_sec / 60);
+      const sec = total_sec % 60;
       return `${min}:${sec < 10 ? '0' : ''}${sec}`;
     }
 
-    async function fetchPlayback() {
+    async function fetch_playback() {
       try {
         const res = await fetch('/api/now-playing');
         if (!res.ok) throw new Error('Network error');
@@ -248,45 +248,45 @@
         if (data && data.title) {
           widget.classList.add('active');
 
-          if (albumArt.src !== data.album_art && data.album_art) {
-            albumArt.src = data.album_art;
+          if (album_art.src !== data.album_art && data.album_art) {
+            album_art.src = data.album_art;
           }
-          trackTitle.textContent = data.title;
-          trackArtist.textContent = data.artist_str || 'Unknown Artist';
+          track_title.textContent = data.title;
+          track_artist.textContent = data.artist_str || 'Unknown Artist';
 
-          currentProgressMs = data.progress_ms || 0;
-          currentDurationMs = data.duration_ms || 1;
-          isPlaying = data.is_playing || false;
-          lastFetchTime = Date.now();
+          current_progress_ms = data.progress_ms || 0;
+          current_duration_ms = data.duration_ms || 1;
+          is_playing = data.is_playing || false;
+          last_fetch_time = Date.now();
 
           // Requester badge
           if (data.requested_by) {
-            requesterBadge.style.display = 'inline-flex';
+            requester_badge.style.display = 'inline-flex';
             const req = data.requested_by;
             if (req.toLowerCase().startsWith('tiktok/')) {
               const name = req.substring(7);
-              requesterBadge.className = 'requester-badge badge-tiktok';
-              requesterBadge.textContent = `🎵 [TikTok] ${name}`;
+              requester_badge.className = 'requester-badge badge-tiktok';
+              requester_badge.textContent = `🎵 [TikTok] ${name}`;
             } else if (req.toLowerCase().startsWith('twitch/')) {
               const name = req.substring(7);
-              requesterBadge.className = 'requester-badge badge-twitch';
-              requesterBadge.textContent = `🎵 [Twitch] ${name}`;
+              requester_badge.className = 'requester-badge badge-twitch';
+              requester_badge.textContent = `🎵 [Twitch] ${name}`;
             } else if (req.toLowerCase().includes('tiktok')) {
-              requesterBadge.className = 'requester-badge badge-tiktok';
-              requesterBadge.textContent = `🎵 ${req}`;
+              requester_badge.className = 'requester-badge badge-tiktok';
+              requester_badge.textContent = `🎵 ${req}`;
             } else if (req.toLowerCase().includes('twitch')) {
-              requesterBadge.className = 'requester-badge badge-twitch';
-              requesterBadge.textContent = `🎵 ${req}`;
+              requester_badge.className = 'requester-badge badge-twitch';
+              requester_badge.textContent = `🎵 ${req}`;
             } else {
-              requesterBadge.className = 'requester-badge badge-default';
-              requesterBadge.textContent = `🎵 Requested by ${req}`;
+              requester_badge.className = 'requester-badge badge-default';
+              requester_badge.textContent = `🎵 Requested by ${req}`;
             }
           } else {
-            requesterBadge.style.display = 'none';
+            requester_badge.style.display = 'none';
           }
 
           // Equalizer
-          if (isPlaying) {
+          if (is_playing) {
             equalizer.classList.add('playing');
             equalizer.style.opacity = '1';
           } else {
@@ -305,26 +305,26 @@
     }
 
     // 60fps smooth progress ticker
-    function updateProgressFrame() {
-      if (isPlaying && currentDurationMs > 0) {
+    function update_progress_frame() {
+      if (is_playing && current_duration_ms > 0) {
         const now = Date.now();
-        const elapsed = now - lastFetchTime;
-        const estProgress = Math.min(currentProgressMs + elapsed, currentDurationMs);
-        const pct = (estProgress / currentDurationMs) * 100;
-        progressFill.style.width = `${pct}%`;
-        timeLabel.textContent = formatTime(estProgress);
-      } else if (currentDurationMs > 0) {
-        const pct = (currentProgressMs / currentDurationMs) * 100;
-        progressFill.style.width = `${pct}%`;
-        timeLabel.textContent = formatTime(currentProgressMs);
+        const elapsed = now - last_fetch_time;
+        const est_progress = Math.min(current_progress_ms + elapsed, current_duration_ms);
+        const pct = (est_progress / current_duration_ms) * 100;
+        progress_fill.style.width = `${pct}%`;
+        time_label.textContent = format_time(est_progress);
+      } else if (current_duration_ms > 0) {
+        const pct = (current_progress_ms / current_duration_ms) * 100;
+        progress_fill.style.width = `${pct}%`;
+        time_label.textContent = format_time(current_progress_ms);
       }
-      requestAnimationFrame(updateProgressFrame);
+      requestAnimationFrame(update_progress_frame);
     }
 
     // Initial fetch and intervals
-    fetchPlayback();
-    setInterval(fetchPlayback, 1200);
-    requestAnimationFrame(updateProgressFrame);
+    fetch_playback();
+    setInterval(fetch_playback, 1200);
+    requestAnimationFrame(update_progress_frame);
   </script>
 </body>
 </html>

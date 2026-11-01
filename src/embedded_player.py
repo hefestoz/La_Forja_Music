@@ -183,7 +183,7 @@ class PersistentCDP:
                 window.__la_forja_ad_skipper_active = true;
                 setInterval(() => {
                     // Click skip button immediately
-                    const skipSelectors = [
+                    const skip_selectors = [
                         '.ytp-skip-ad-button',
                         '.ytp-ad-skip-button',
                         '.ytp-ad-skip-button-modern',
@@ -192,7 +192,7 @@ class PersistentCDP:
                         '.ytp-ad-overlay-close-button',
                         '.ytp-ad-feedback-dialog-close-button'
                     ];
-                    for (const sel of skipSelectors) {
+                    for (const sel of skip_selectors) {
                         const btn = document.querySelector(sel);
                         if (btn) {
                             try { btn.click(); } catch(e) {}
@@ -201,10 +201,10 @@ class PersistentCDP:
 
                     // Fast-forward and mute video if ad is showing
                     const player = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
-                    const isAd = player && (player.classList.contains("ad-showing") || player.classList.contains("ad-interrupting"));
+                    const is_ad = player && (player.classList.contains("ad-showing") || player.classList.contains("ad-interrupting"));
                     const v = document.querySelector("video");
 
-                    if (isAd && v) {
+                    if (is_ad && v) {
                         v.muted = true;
                         v.playbackRate = 16.0;
                         if (v.duration && !isNaN(v.duration)) {
@@ -215,10 +215,10 @@ class PersistentCDP:
             }
 
             // 3. Auto click play button if video is ready and paused
-            const playBtn = document.querySelector(".ytp-large-play-button") || document.querySelector(".ytp-play-button");
+            const play_btn = document.querySelector(".ytp-large-play-button") || document.querySelector(".ytp-play-button");
             const v = document.querySelector("video");
             if (v && v.paused) {
-                if (playBtn) playBtn.click();
+                if (play_btn) play_btn.click();
                 else v.play().catch(() => {});
             }
             return "SHIELD_ACTIVE";
@@ -233,17 +233,17 @@ class PersistentCDP:
         """Explicitly executes ad skip logic from Python on monitor ticks."""
         script = """
         (() => {
-            const skipBtns = document.querySelectorAll(
+            const skip_btns = document.querySelectorAll(
                 '.ytp-skip-ad-button, .ytp-ad-skip-button, .ytp-ad-skip-button-modern, ' +
                 '.ytp-ad-skip-button-slot, button.ytp-ad-skip-button-modern, .ytp-ad-overlay-close-button'
             );
-            for (const btn of skipBtns) {
+            for (const btn of skip_btns) {
                 try { btn.click(); } catch(e) {}
             }
             const player = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
-            const isAd = player && (player.classList.contains("ad-showing") || player.classList.contains("ad-interrupting"));
+            const is_ad = player && (player.classList.contains("ad-showing") || player.classList.contains("ad-interrupting"));
             const v = document.querySelector("video");
-            if (isAd && v) {
+            if (is_ad && v) {
                 v.muted = true;
                 v.playbackRate = 16.0;
                 if (v.duration && !isNaN(v.duration)) {
@@ -280,9 +280,9 @@ class PersistentCDP:
         """Toggles play/pause reliably by clicking YouTube's player button."""
         script = """
         (() => {
-            const playBtn = document.querySelector(".ytp-play-button");
-            if (playBtn) {
-                playBtn.click();
+            const play_btn = document.querySelector(".ytp-play-button");
+            if (play_btn) {
+                play_btn.click();
             } else {
                 const v = document.querySelector("video");
                 if (v) { if (v.paused) v.play(); else v.pause(); }
@@ -298,8 +298,8 @@ class PersistentCDP:
         (() => {
             const v = document.querySelector("video");
             if (v && v.paused) {
-                const playBtn = document.querySelector(".ytp-play-button");
-                if (playBtn) playBtn.click();
+                const play_btn = document.querySelector(".ytp-play-button");
+                if (play_btn) play_btn.click();
                 else v.play().catch(() => {});
             }
         })()
@@ -311,8 +311,8 @@ class PersistentCDP:
         (() => {
             const v = document.querySelector("video");
             if (v && !v.paused) {
-                const playBtn = document.querySelector(".ytp-play-button");
-                if (playBtn) playBtn.click();
+                const play_btn = document.querySelector(".ytp-play-button");
+                if (play_btn) play_btn.click();
                 else v.pause();
             }
         })()
@@ -336,27 +336,32 @@ class PersistentCDP:
         script = """
         (() => {
             const player = document.getElementById("movie_player") || document.querySelector(".html5-video-player");
-            const isAd = player && (player.classList.contains("ad-showing") || player.classList.contains("ad-interrupting") || Boolean(document.querySelector(".ad-showing, .ad-interrupting")));
+            const is_ad = player && (player.classList.contains("ad-showing") || player.classList.contains("ad-interrupting") || Boolean(document.querySelector(".ad-showing, .ad-interrupting")));
             const v = document.querySelector("video");
             if (!v) return null;
 
-            let playerState = -1;
-            let currentVidId = null;
+            let player_state = -1;
+            let current_vid_id = null;
             if (player && typeof player.getPlayerState === "function") {
-                try { playerState = player.getPlayerState(); } catch(e) {}
+                try { player_state = player.getPlayerState(); } catch(e) {}
             }
             if (player && typeof player.getVideoData === "function") {
-                try { currentVidId = player.getVideoData()?.video_id; } catch(e) {}
+                try { current_vid_id = player.getVideoData()?.video_id; } catch(e) {}
             }
 
             return {
-                currentTime: v.currentTime,
+                current_time: v.currentTime,
                 duration: v.duration,
                 paused: v.paused,
                 ended: v.ended,
-                isAd: Boolean(isAd),
-                playerState: playerState,
-                videoId: currentVidId
+                is_ad: Boolean(is_ad),
+                player_state: player_state,
+                video_id: current_vid_id,
+                // Backward compatibility aliases
+                currentTime: v.currentTime,
+                isAd: Boolean(is_ad),
+                playerState: player_state,
+                videoId: current_vid_id
             };
         })()
         """
@@ -627,13 +632,13 @@ class EmbeddedPlayer(ctk.CTkFrame):
 
                         status = self.cdp.get_status()
                         if status and isinstance(status, dict):
-                            is_ad = status.get("isAd", False)
-                            cur_sec = status.get("currentTime", 0)
+                            is_ad = status.get("is_ad", status.get("isAd", False))
+                            cur_sec = status.get("current_time", status.get("currentTime", 0))
                             dur_sec = status.get("duration", 0)
                             paused = status.get("paused", False)
                             ended = status.get("ended", False)
-                            player_state = status.get("playerState", -1)
-                            active_vid_id = status.get("videoId")
+                            player_state = status.get("player_state", status.get("playerState", -1))
+                            active_vid_id = status.get("video_id", status.get("videoId"))
 
                             # If an ad is currently playing, ad-skipper is handling it.
                             # NEVER update track progress or trigger track advancement while in an ad!
