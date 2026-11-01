@@ -1,9 +1,12 @@
 import os
 import re
 import sys
+import time
+import base64
 import webbrowser
 import threading
 import logging
+import requests
 import tkinter as tk
 from typing import Optional, Callable, Dict, Any
 import customtkinter as ctk
@@ -11,37 +14,42 @@ import customtkinter as ctk
 from src.config_manager import ConfigManager
 from src.auth_server import OAuthServer
 from src.spotify_service import SpotifyService
-from src.twitch_service import validate_twitch_token
+from src.twitch_service import validate_twitch_token, DEFAULT_TWITCH_CLIENT_ID
 
 logger = logging.getLogger("SetupWizard")
 
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("green")
 
-class SetupWizard(ctk.CTk):
+class BaseSetupWizard:
     """
-    Interactive Setup and Configuration Wizard for Streamers.
-    Guides non-technical streamers through Spotify authorization,
-    playlist selection/creation, Twitch OAuth login / validation,
-    TikTok handles, and rule settings.
+    Core Setup and Configuration Logic for Streamers.
+    Shared between standalone SetupWizard (ctk.CTk) and SettingsModal (ctk.CTkToplevel).
     """
 
-    def __init__(
+    def _init_wizard(
         self,
         config_manager: Optional[ConfigManager] = None,
         on_complete: Optional[Callable[[], None]] = None,
         edit_mode: bool = False
     ):
-        super().__init__()
-
         self.config = config_manager or ConfigManager()
         self.on_complete = on_complete
         self.edit_mode = edit_mode
 
         # Window settings
         self.title("La Forja Music - Setup Wizard" if not edit_mode else "La Forja Music - Settings")
-        self.geometry("540x860")
-        self.minsize(500, 720)
+        try:
+            screen_w = self.winfo_screenwidth()
+            screen_h = self.winfo_screenheight()
+            win_w = 540
+            win_h = min(760, max(560, screen_h - 100))
+            x = max(0, (screen_w - win_w) // 2)
+            y = max(0, (screen_h - win_h) // 2 - 20)
+            self.geometry(f"{win_w}x{win_h}+{x}+{y}")
+        except Exception:
+            self.geometry("540x740")
+        self.minsize(500, 560)
         self.configure(fg_color="#121318")
 
         self.spotify_service: Optional[SpotifyService] = None
@@ -50,6 +58,7 @@ class SetupWizard(ctk.CTk):
         self._twitch_validate_timer: Optional[Any] = None
         self._guide_visible = False
         self._twitch_guide_visible = False
+        self._manual_twitch_visible = False
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -73,6 +82,8 @@ class SetupWizard(ctk.CTk):
 
     def _on_close(self):
         """Clean up loopback server on window close."""
+        if hasattr(self, "_twitch_poll_cancel") and self._twitch_poll_cancel:
+            self._twitch_poll_cancel.set()
         if self.oauth_server:
             self.oauth_server.stop()
         self.destroy()
@@ -110,9 +121,35 @@ class SetupWizard(ctk.CTk):
                 logger.debug(f"Could not pre-init SpotifyService: {e}")
 
     def _build_ui(self):
-        # Scrollable container for all configuration cards
+        # 1. Dock the footer permanently at the bottom FIRST so it is never pushed off-screen
+        footer = ctk.CTkFrame(self, fg_color="#181a22", corner_radius=0, height=72)
+        footer.pack(fill="x", side="bottom")
+        footer.pack_propagate(False)
+
+        self.lbl_status = ctk.CTkLabel(
+            footer,
+            text="",
+            font=ctk.CTkFont(size=12),
+            text_color="#8E92A8"
+        )
+        self.lbl_status.pack(side="left", padx=16, pady=16)
+
+        btn_action_text = "🚀 Save & Start Bot" if not self.edit_mode else "💾 Save Settings"
+        self.btn_save = ctk.CTkButton(
+            footer,
+            text=btn_action_text,
+            font=ctk.CTkFont(size=14, weight="bold"),
+            fg_color="#1DB954",
+            hover_color="#1AA34A",
+            height=42,
+            width=160,
+            command=self._save_and_launch
+        )
+        self.btn_save.pack(side="right", padx=16, pady=15)
+
+        # 2. Scrollable container for all configuration cards packed SECOND with expand=True
         self.scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
-        self.scroll.pack(fill="both", expand=True, padx=16, pady=(16, 10))
+        self.scroll.pack(fill="both", expand=True, padx=16, pady=(16, 0))
 
         # 1. Header
         header_title = "🎧 STREAMER SETUP WIZARD" if not self.edit_mode else "⚙️ STREAMER SETTINGS"
@@ -149,31 +186,6 @@ class SetupWizard(ctk.CTk):
         # 6. Danger Zone / Reset & Logout Card
         self._build_danger_card()
 
-        # Footer Frame (Status message & Save/Start button)
-        footer = ctk.CTkFrame(self, fg_color="#181a22", corner_radius=0, height=80)
-        footer.pack(fill="x", side="bottom")
-
-        self.lbl_status = ctk.CTkLabel(
-            footer,
-            text="",
-            font=ctk.CTkFont(size=12),
-            text_color="#8E92A8"
-        )
-        self.lbl_status.pack(side="left", padx=16, pady=16)
-
-        btn_action_text = "🚀 Save & Start Bot" if not self.edit_mode else "💾 Save Settings"
-        self.btn_save = ctk.CTkButton(
-            footer,
-            text=btn_action_text,
-            font=ctk.CTkFont(size=14, weight="bold"),
-            fg_color="#1DB954",
-            hover_color="#1AA34A",
-            height=42,
-            width=160,
-            command=self._save_and_launch
-        )
-        self.btn_save.pack(side="right", padx=16, pady=16)
-
     # ------------------------------------------------------------------
     # Card 1: Spotify Account & Playlist
     # ------------------------------------------------------------------
@@ -181,17 +193,80 @@ class SetupWizard(ctk.CTk):
         card = ctk.CTkFrame(self.scroll, fg_color="#181a22", corner_radius=14)
         card.pack(fill="x", pady=8)
 
-        lbl = ctk.CTkLabel(
-            card,
-            text="1. Spotify Connection",
-            font=ctk.CTkFont(size=15, weight="bold"),
-            text_color="#1DB954"
-        )
-        lbl.pack(anchor="w", padx=16, pady=(12, 6))
+        # Header Row with Platform Selector
+        top_row = ctk.CTkFrame(card, fg_color="transparent")
+        top_row.pack(fill="x", padx=16, pady=(12, 6))
 
+        lbl = ctk.CTkLabel(
+            top_row,
+            text="1. Music Platform Destination",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            text_color="#FFFFFF"
+        )
+        lbl.pack(side="left")
+
+        current_plat = self.config.get("music_platform", "spotify")
+        self.platform_var = ctk.StringVar(value="Spotify" if current_plat == "spotify" else "YouTube")
+        self.seg_platform = ctk.CTkSegmentedButton(
+            top_row,
+            values=["Spotify", "YouTube"],
+            variable=self.platform_var,
+            command=self._on_platform_changed,
+            selected_color="#1DB954" if current_plat == "spotify" else "#FE2C55",
+            selected_hover_color="#1AA34A" if current_plat == "spotify" else "#E11D48",
+            unselected_color="#252836",
+            unselected_hover_color="#32364a",
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        self.seg_platform.pack(side="right")
+
+        # Container for Spotify section
+        self.spotify_container = ctk.CTkFrame(card, fg_color="transparent")
+
+        # Container for YouTube section
+        self.youtube_container = ctk.CTkFrame(card, fg_color="transparent")
+
+        # --- YouTube No-Login Section ---
+        self.youtube_status = ctk.CTkLabel(
+            self.youtube_container,
+            text="🟢 YouTube In-App Player (Instant No-Login Mode Ready)",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#10B981"
+        )
+        self.youtube_status.pack(anchor="w", padx=16, pady=(4, 6))
+
+        lbl_yt_info = ctk.CTkLabel(
+            self.youtube_container,
+            text=(
+                "Music and videos will play directly inside the desktop app window.\n"
+                "• No Google accounts, passwords, or API keys required!\n"
+                "• Viewers request songs in chat using !sr <song title, artist, or YouTube link>."
+            ),
+            font=ctk.CTkFont(size=11),
+            text_color="#CBD5E1",
+            justify="left"
+        )
+        lbl_yt_info.pack(anchor="w", padx=16, pady=(0, 10))
+
+        lbl_yt_pl = ctk.CTkLabel(
+            self.youtube_container,
+            text="Starting YouTube Playlist or Video URL (Optional):",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#FFFFFF"
+        )
+        lbl_yt_pl.pack(anchor="w", padx=16, pady=(2, 2))
+
+        self.entry_yt_playlist = ctk.CTkEntry(
+            self.youtube_container,
+            placeholder_text="e.g. https://www.youtube.com/playlist?list=PL... (or leave blank)"
+        )
+        self.entry_yt_playlist.insert(0, self.config.get("youtube_initial_playlist", ""))
+        self.entry_yt_playlist.pack(fill="x", padx=16, pady=(0, 12))
+
+        # --- Spotify Section ---
         # Status text
         self.spotify_status = ctk.CTkLabel(
-            card,
+            self.spotify_container,
             text="Checking Spotify authorization...",
             font=ctk.CTkFont(size=12),
             text_color="#A0A5BA"
@@ -199,7 +274,7 @@ class SetupWizard(ctk.CTk):
         self.spotify_status.pack(anchor="w", padx=16, pady=(0, 8))
 
         # Buttons frame
-        self.btn_frame = ctk.CTkFrame(card, fg_color="transparent")
+        self.btn_frame = ctk.CTkFrame(self.spotify_container, fg_color="transparent")
         self.btn_frame.pack(fill="x", padx=16, pady=(0, 8))
 
         self.btn_connect_spotify = ctk.CTkButton(
@@ -224,7 +299,7 @@ class SetupWizard(ctk.CTk):
         self.btn_spotify_guide.pack(side="left")
 
         # Step-by-Step Spotify Guide Panel (Collapsible)
-        self.spotify_guide_frame = ctk.CTkFrame(card, fg_color="#0F172A", corner_radius=10, border_width=1, border_color="#1E3A8A")
+        self.spotify_guide_frame = ctk.CTkFrame(self.spotify_container, fg_color="#0F172A", corner_radius=10, border_width=1, border_color="#1E3A8A")
 
         lbl_g_title = ctk.CTkLabel(
             self.spotify_guide_frame,
@@ -287,7 +362,7 @@ class SetupWizard(ctk.CTk):
         ctk.CTkLabel(self.spotify_guide_frame, text=guide_step3, font=ctk.CTkFont(size=11), text_color="#E2E8F0", justify="left").pack(anchor="w", padx=14, pady=(2, 10))
 
         # Playlist selection frame
-        self.playlist_frame = ctk.CTkFrame(card, fg_color="transparent")
+        self.playlist_frame = ctk.CTkFrame(self.spotify_container, fg_color="transparent")
         self.playlist_frame.pack(fill="x", padx=16, pady=(4, 12))
 
         lbl_pl = ctk.CTkLabel(
@@ -321,7 +396,7 @@ class SetupWizard(ctk.CTk):
         # Developer Credentials Accordion
         self.dev_toggle_var = ctk.BooleanVar(value=False)
         self.dev_toggle = ctk.CTkCheckBox(
-            card,
+            self.spotify_container,
             text="Advanced Developer Credentials (Spotify & Twitch API)",
             variable=self.dev_toggle_var,
             font=ctk.CTkFont(size=11),
@@ -330,7 +405,7 @@ class SetupWizard(ctk.CTk):
         )
         self.dev_toggle.pack(anchor="w", padx=16, pady=(4, 8))
 
-        self.dev_frame = ctk.CTkFrame(card, fg_color="#13141a", corner_radius=10)
+        self.dev_frame = ctk.CTkFrame(self.spotify_container, fg_color="#13141a", corner_radius=10)
 
         ctk.CTkLabel(self.dev_frame, text="Spotify Client ID:", font=ctk.CTkFont(size=11), text_color="#A0A5BA").pack(anchor="w", padx=12, pady=(6, 1))
 
@@ -389,7 +464,45 @@ class SetupWizard(ctk.CTk):
         )
         btn_tw_dev.pack(side="right")
 
+        # Action buttons directly inside Developer Credentials Frame
+        cred_btn_row = ctk.CTkFrame(self.dev_frame, fg_color="transparent")
+        cred_btn_row.pack(fill="x", padx=12, pady=(4, 10))
+
+        self.btn_save_spotify_keys = ctk.CTkButton(
+            cred_btn_row,
+            text="💾 Save Keys & Connect Spotify",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            fg_color="#1DB954",
+            hover_color="#1AA34A",
+            height=34,
+            command=self._save_and_connect_spotify
+        )
+        self.btn_save_spotify_keys.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        self.btn_save_keys_only = ctk.CTkButton(
+            cred_btn_row,
+            text="💾 Save Keys Only",
+            font=ctk.CTkFont(size=12),
+            fg_color="#252836",
+            hover_color="#32364a",
+            height=34,
+            width=130,
+            command=self._save_spotify_keys_only
+        )
+        self.btn_save_keys_only.pack(side="right")
+
         self._refresh_spotify_ui()
+        self._on_platform_changed(self.platform_var.get())
+
+    def _on_platform_changed(self, chosen: str):
+        if chosen == "YouTube":
+            self.spotify_container.pack_forget()
+            self.youtube_container.pack(fill="x", pady=(0, 4))
+            self.seg_platform.configure(selected_color="#FE2C55", selected_hover_color="#E11D48")
+        else:
+            self.youtube_container.pack_forget()
+            self.spotify_container.pack(fill="x", pady=(0, 4))
+            self.seg_platform.configure(selected_color="#1DB954", selected_hover_color="#1AA34A")
 
     def _toggle_spotify_guide(self):
         if self._guide_visible:
@@ -401,13 +514,25 @@ class SetupWizard(ctk.CTk):
             self._guide_visible = True
             self.btn_spotify_guide.configure(text="✖ Close Guide")
 
+    def _toggle_manual_twitch(self):
+        if self._manual_twitch_visible:
+            self.manual_twitch_frame.pack_forget()
+            self._manual_twitch_visible = False
+            self.btn_toggle_manual_twitch.configure(text="⚙️ Advanced / Manual Token Setup ▼")
+        else:
+            self.manual_twitch_frame.pack(fill="x", padx=16, pady=(0, 10), after=self.btn_toggle_manual_twitch)
+            self._manual_twitch_visible = True
+            self.btn_toggle_manual_twitch.configure(text="⚙️ Close Manual Setup ▲")
+
     def _toggle_twitch_guide(self):
         if self._twitch_guide_visible:
             self.twitch_guide_frame.pack_forget()
             self._twitch_guide_visible = False
             self.btn_twitch_guide.configure(text="❓ How to Connect Twitch")
         else:
-            self.twitch_guide_frame.pack(fill="x", padx=16, pady=(4, 10), after=self.tw_btn_frame)
+            if not self._manual_twitch_visible:
+                self._toggle_manual_twitch()
+            self.twitch_guide_frame.pack(fill="x", padx=12, pady=(4, 8), after=self.manual_btn_row)
             self._twitch_guide_visible = True
             self.btn_twitch_guide.configure(text="✖ Close Guide")
 
@@ -424,6 +549,8 @@ class SetupWizard(ctk.CTk):
         self.btn_connect_twitch.configure(state=state)
         if hasattr(self, "btn_paste_tw"):
             self.btn_paste_tw.configure(state=state)
+        if hasattr(self, "btn_toggle_manual_twitch"):
+            self.btn_toggle_manual_twitch.configure(state=state)
 
         if not enabled:
             if self._twitch_guide_visible:
@@ -484,6 +611,41 @@ class SetupWizard(ctk.CTk):
             self.dev_frame.pack(fill="x", padx=16, pady=(0, 12))
         else:
             self.dev_frame.pack_forget()
+
+    def _save_spotify_keys_only(self):
+        cid = self.entry_client_id.get().strip()
+        csecret = self.entry_client_secret.get().strip()
+
+        if not cid or not csecret:
+            self._show_error("Please enter both Spotify Client ID and Client Secret.")
+            return
+
+        self.config.set("spotify_client_id", cid)
+        self.config.set("spotify_client_secret", csecret)
+        self.config.save()
+        tw_cid = self.entry_twitch_client_id.get().strip()
+        if tw_cid:
+            self.config.set("twitch_client_id", tw_cid)
+        self.config.save()
+        self._show_success("Spotify credentials saved to config.json!")
+
+    def _save_and_connect_spotify(self):
+        cid = self.entry_client_id.get().strip()
+        csecret = self.entry_client_secret.get().strip()
+
+        if not cid or not csecret:
+            self._show_error("Please enter both Spotify Client ID and Client Secret.")
+            return
+
+        self.config.set("spotify_client_id", cid)
+        self.config.set("spotify_client_secret", csecret)
+        self.config.save()
+        tw_cid = self.entry_twitch_client_id.get().strip()
+        if tw_cid:
+            self.config.set("twitch_client_id", tw_cid)
+        self.config.save()
+        self._show_success("Spotify keys saved! Opening authorization...")
+        self._start_spotify_login()
 
     def _refresh_spotify_ui(self):
         """Updates Spotify status banner and playlists list."""
@@ -573,6 +735,7 @@ class SetupWizard(ctk.CTk):
 
         self.config.set("spotify_client_id", cid)
         self.config.set("spotify_client_secret", csecret)
+        self.config.save()
 
         try:
             self.spotify_service = SpotifyService(
@@ -652,41 +815,72 @@ class SetupWizard(ctk.CTk):
         self.twitch_status.pack(anchor="w", padx=16, pady=(0, 6))
 
         self.tw_btn_frame = ctk.CTkFrame(card, fg_color="transparent")
-        self.tw_btn_frame.pack(fill="x", padx=16, pady=(0, 8))
+        self.tw_btn_frame.pack(fill="x", padx=16, pady=(0, 4))
 
-        self.btn_get_twitch_token = ctk.CTkButton(
+        self.btn_connect_twitch = ctk.CTkButton(
             self.tw_btn_frame,
-            text="🔑 1. Generate Token Online",
-            font=ctk.CTkFont(size=12, weight="bold"),
+            text="🟣 Connect with Twitch",
+            font=ctk.CTkFont(size=13, weight="bold"),
             fg_color="#9146FF",
             hover_color="#772CE8",
+            height=38,
+            command=self._start_twitch_login
+        )
+        self.btn_connect_twitch.pack(fill="x")
+
+        lbl_tw_hint = ctk.CTkLabel(
+            card,
+            text="1-Click browser login. No API keys or manual tokens required!",
+            font=ctk.CTkFont(size=11),
+            text_color="#94A3B8"
+        )
+        lbl_tw_hint.pack(anchor="w", padx=16, pady=(2, 6))
+
+        # Toggle button for manual / advanced Twitch credentials
+        self.btn_toggle_manual_twitch = ctk.CTkButton(
+            card,
+            text="⚙️ Advanced / Manual Token Setup ▼",
+            font=ctk.CTkFont(size=11),
+            fg_color="transparent",
+            hover_color="#252836",
+            text_color="#C084FC",
+            height=24,
+            command=self._toggle_manual_twitch
+        )
+        self.btn_toggle_manual_twitch.pack(anchor="w", padx=14, pady=(0, 6))
+
+        # Collapsible container for manual token & guide (closed by default)
+        self.manual_twitch_frame = ctk.CTkFrame(card, fg_color="#13101E", corner_radius=10)
+
+        # Inside manual_twitch_frame:
+        self.manual_btn_row = ctk.CTkFrame(self.manual_twitch_frame, fg_color="transparent")
+        self.manual_btn_row.pack(fill="x", padx=12, pady=(8, 4))
+
+        self.btn_get_twitch_token = ctk.CTkButton(
+            self.manual_btn_row,
+            text="🔑 Generate Token Online",
+            font=ctk.CTkFont(size=11),
+            fg_color="#252836",
+            hover_color="#32364a",
+            height=28,
             command=self._open_twitch_token_generator
         )
         self.btn_get_twitch_token.pack(side="left", padx=(0, 8))
 
         self.btn_twitch_guide = ctk.CTkButton(
-            self.tw_btn_frame,
+            self.manual_btn_row,
             text="❓ How to Connect Twitch",
-            font=ctk.CTkFont(size=12),
+            font=ctk.CTkFont(size=11),
             fg_color="#1E293B",
             hover_color="#334155",
             text_color="#C084FC",
+            height=28,
             command=self._toggle_twitch_guide
         )
-        self.btn_twitch_guide.pack(side="left", padx=(0, 8))
-
-        self.btn_connect_twitch = ctk.CTkButton(
-            self.tw_btn_frame,
-            text="🟣 Direct OAuth (Custom App)",
-            font=ctk.CTkFont(size=12),
-            fg_color="#252836",
-            hover_color="#32364a",
-            command=self._start_twitch_login
-        )
-        self.btn_connect_twitch.pack(side="left")
+        self.btn_twitch_guide.pack(side="left")
 
         # Step-by-Step Twitch Guide Panel (Collapsible, closed by default)
-        self.twitch_guide_frame = ctk.CTkFrame(card, fg_color="#13101E", corner_radius=10, border_width=1, border_color="#581C87")
+        self.twitch_guide_frame = ctk.CTkFrame(self.manual_twitch_frame, fg_color="#1A1528", corner_radius=8, border_width=1, border_color="#581C87")
 
         lbl_tw_g_title = ctk.CTkLabel(
             self.twitch_guide_frame,
@@ -717,16 +911,16 @@ class SetupWizard(ctk.CTk):
             "   (This automatically selects the required 'chat:read' and 'chat:edit' permissions).\n"
             "3. Click \"Authorize\" on the Twitch authorization screen.\n"
             "4. Scroll down to the \"ACCESS TOKEN\" box, select and copy your token.\n"
-            "5. Come back here and click [ 📋 2. Paste Token ] below!\n"
+            "5. Come back here and click [ 📋 Paste ] below!\n"
             "   • Your channel name will be verified and auto-detected automatically."
         )
         ctk.CTkLabel(self.twitch_guide_frame, text=tw_guide_step2, font=ctk.CTkFont(size=11), text_color="#E2E8F0", justify="left").pack(anchor="w", padx=14, pady=(2, 10))
 
-        lbl_tw_tok = ctk.CTkLabel(card, text="Twitch Chat Token (Copy & paste Access Token here):", font=ctk.CTkFont(size=11, weight="bold"), text_color="#FFFFFF")
-        lbl_tw_tok.pack(anchor="w", padx=16, pady=(6, 2))
+        lbl_tw_tok = ctk.CTkLabel(self.manual_twitch_frame, text="Twitch Chat Token (Manual OAuth Token):", font=ctk.CTkFont(size=11, weight="bold"), text_color="#FFFFFF")
+        lbl_tw_tok.pack(anchor="w", padx=12, pady=(4, 2))
 
-        tok_row = ctk.CTkFrame(card, fg_color="transparent")
-        tok_row.pack(fill="x", padx=16, pady=(0, 6))
+        tok_row = ctk.CTkFrame(self.manual_twitch_frame, fg_color="transparent")
+        tok_row.pack(fill="x", padx=12, pady=(0, 6))
 
         self.entry_twitch_token = ctk.CTkEntry(tok_row, show="•", placeholder_text="Paste your Access Token here (oauth:xxxx or raw token)")
         self.entry_twitch_token.insert(0, self.config.get("twitch_token", ""))
@@ -736,21 +930,22 @@ class SetupWizard(ctk.CTk):
 
         self.btn_paste_tw = ctk.CTkButton(
             tok_row,
-            text="📋 2. Paste Token",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            width=120,
-            fg_color="#9146FF",
-            hover_color="#772CE8",
+            text="📋 Paste",
+            font=ctk.CTkFont(size=11),
+            width=70,
+            height=28,
+            fg_color="#252836",
+            hover_color="#32364a",
             command=self._paste_twitch_token
         )
         self.btn_paste_tw.pack(side="right")
 
-        lbl_tw = ctk.CTkLabel(card, text="Twitch Channel Name (Auto-detected from token):", font=ctk.CTkFont(size=11), text_color="#7A8098")
-        lbl_tw.pack(anchor="w", padx=16, pady=(2, 1))
+        lbl_tw = ctk.CTkLabel(self.manual_twitch_frame, text="Twitch Channel Name:", font=ctk.CTkFont(size=11), text_color="#7A8098")
+        lbl_tw.pack(anchor="w", padx=12, pady=(2, 1))
 
-        self.entry_twitch_channel = ctk.CTkEntry(card, placeholder_text="e.g. hefestoz")
+        self.entry_twitch_channel = ctk.CTkEntry(self.manual_twitch_frame, placeholder_text="e.g. hefestoz")
         self.entry_twitch_channel.insert(0, self.config.get("twitch_channel", ""))
-        self.entry_twitch_channel.pack(fill="x", padx=16, pady=(0, 12))
+        self.entry_twitch_channel.pack(fill="x", padx=12, pady=(0, 10))
 
         # --- TikTok Section ---
         tt_header_row = ctk.CTkFrame(card, fg_color="transparent")
@@ -788,10 +983,10 @@ class SetupWizard(ctk.CTk):
 
     def _start_twitch_login(self):
         tw_cid = self.entry_twitch_client_id.get().strip() or self.config.get("twitch_client_id")
-        self._ensure_oauth_server()
 
         if tw_cid:
-            # Browser-based OAuth Implicit Grant
+            # Custom Application Client ID: use direct local OAuth loopback
+            self._ensure_oauth_server()
             auth_url = (
                 f"https://id.twitch.tv/oauth2/authorize"
                 f"?client_id={tw_cid}"
@@ -799,15 +994,102 @@ class SetupWizard(ctk.CTk):
                 f"&response_type=token"
                 f"&scope=chat%3Aread+chat%3Aedit+user%3Aread%3Achat"
             )
-            logger.info(f"Opening Twitch authorization URL: {auth_url}")
+            logger.info(f"Opening custom Twitch app authorization: {auth_url}")
             webbrowser.open(auth_url)
             self.twitch_status.configure(
-                text="⏳ Authorizing in browser... Complete Twitch approval to connect.",
+                text="⏳ Authorizing with custom Twitch App... Complete approval in browser.",
                 text_color="#9146FF"
             )
-        else:
-            # 1-Click online token generator
-            self._open_twitch_token_generator()
+            return
+
+        # Default Nightbot-style: Zero API keys / Client IDs required.
+        # Uses automated TwitchTokenGenerator API workflow to generate an official Twitch auth prompt.
+        self.twitch_status.configure(
+            text="⏳ Initializing 1-click Twitch login...",
+            text_color="#9146FF"
+        )
+
+        # Cancel any active poll
+        if hasattr(self, "_twitch_poll_cancel") and self._twitch_poll_cancel:
+            self._twitch_poll_cancel.set()
+        self._twitch_poll_cancel = threading.Event()
+        cancel_event = self._twitch_poll_cancel
+
+        def safe_ui(fn):
+            try:
+                self.after(0, fn)
+            except Exception:
+                pass
+
+        def worker():
+            try:
+                app_title = "La Forja Music"
+                encoded_title = base64.urlsafe_b64encode(app_title.encode("utf-8")).decode("utf-8").rstrip("=")
+                scopes = "chat:read+chat:edit+user:read:chat"
+                create_url = f"https://twitchtokengenerator.com/api/create/{encoded_title}/{scopes}"
+
+                resp = requests.get(create_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) LaForjaMusic/1.0"}, timeout=8)
+                data = resp.json()
+
+                if not data.get("success"):
+                    raise ValueError(data.get("message") or "Failed to initiate token flow")
+
+                flow_id = data["id"]
+                auth_url = data["message"]
+
+                logger.info(f"Opening 1-click Twitch auth URL: {auth_url}")
+                webbrowser.open(auth_url)
+
+                # Poll status endpoint every 2.5 seconds up to 3 minutes
+                status_url = f"https://twitchtokengenerator.com/api/status/{flow_id}"
+                start_time = time.time()
+
+                while time.time() - start_time < 180:
+                    if cancel_event.is_set():
+                        return
+                    time.sleep(2.5)
+                    if cancel_event.is_set():
+                        return
+
+                    try:
+                        s_resp = requests.get(status_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) LaForjaMusic/1.0"}, timeout=6)
+                        s_data = s_resp.json()
+
+                        if s_data.get("success"):
+                            token = (
+                                s_data.get("token")
+                                or s_data.get("access_token")
+                                or (s_data.get("data", {}).get("token") if isinstance(s_data.get("data"), dict) else None)
+                                or (s_data.get("token", {}).get("access_token") if isinstance(s_data.get("token"), dict) else None)
+                            )
+                            if token:
+                                logger.info("Successfully received Twitch access token via automated workflow!")
+                                self._handle_twitch_oauth_token(str(token))
+                                return
+                        elif s_data.get("error") == 4:
+                            # Instance expired
+                            break
+                    except Exception as pe:
+                        logger.debug(f"Twitch poll tick error: {pe}")
+
+                def notify_timeout():
+                    self.twitch_status.configure(
+                        text="⚠️ Twitch authorization timed out. Click Connect to try again.",
+                        text_color="#F59E0B"
+                    )
+                safe_ui(notify_timeout)
+
+            except Exception as e:
+                logger.error(f"Failed automated Twitch login: {e}")
+                def fallback():
+                    self.twitch_status.configure(
+                        text="ℹ️ Opening Twitch token generator in browser...",
+                        text_color="#3B82F6"
+                    )
+                    self._open_twitch_token_generator()
+                safe_ui(fallback)
+
+        threading.Thread(target=worker, daemon=True).start()
 
     def _open_twitch_token_generator(self):
         url = "https://twitchtokengenerator.com/"
@@ -830,7 +1112,11 @@ class SetupWizard(ctk.CTk):
             self.entry_twitch_token.insert(0, clean_token)
             self._validate_twitch_token_async(clean_token)
 
-        self.after(0, update)
+        try:
+            if self.winfo_exists():
+                self.after(0, update)
+        except Exception:
+            pass
 
     def _on_twitch_token_key(self, event=None):
         if self._twitch_validate_timer:
@@ -1153,6 +1439,8 @@ class SetupWizard(ctk.CTk):
                     logger.warning(f"Could not remove {cp}: {e}")
 
         # 3. Stop loopback server if running
+        if hasattr(self, "_twitch_poll_cancel") and self._twitch_poll_cancel:
+            self._twitch_poll_cancel.set()
         if self.oauth_server:
             self.oauth_server.stop()
             self.oauth_server = None
@@ -1191,18 +1479,25 @@ class SetupWizard(ctk.CTk):
             text="⚪ Not connected to Twitch",
             text_color="#A0A5BA"
         )
-        self.btn_connect_twitch.configure(text="🟣 Direct OAuth (Custom App)")
+        self.btn_connect_twitch.configure(text="🟣 Connect with Twitch")
 
         # 6. Reset guides to closed by default
         if self._guide_visible:
             self._toggle_spotify_guide()
         if self._twitch_guide_visible:
             self._toggle_twitch_guide()
+        if self._manual_twitch_visible:
+            self._toggle_manual_twitch()
 
         self.enable_twitch_var.set(True)
         self.enable_tiktok_var.set(True)
         self._on_twitch_enable_toggle()
         self._on_tiktok_enable_toggle()
+
+        self.platform_var.set("YouTube")
+        self._on_platform_changed("YouTube")
+        if hasattr(self, "entry_yt_playlist"):
+            self.entry_yt_playlist.delete(0, "end")
 
         self._show_success("Successfully logged out from all accounts and reset settings.")
 
@@ -1256,10 +1551,16 @@ class SetupWizard(ctk.CTk):
             except Exception as e:
                 logger.warning(f"Could not auto-resolve channel from token: {e}")
 
+        chosen_platform = "youtube" if self.platform_var.get() == "YouTube" else "spotify"
+        self.config.set("music_platform", chosen_platform)
+        if hasattr(self, "entry_yt_playlist"):
+            self.config.set("youtube_initial_playlist", self.entry_yt_playlist.get().strip())
+
         self.config.set("enable_twitch", enable_tw)
         self.config.set("enable_tiktok", enable_tt)
         self.config.set("spotify_client_id", cid)
         self.config.set("spotify_client_secret", csecret)
+        self.config.save()
         self.config.set("twitch_client_id", tw_cid)
         self.config.set("twitch_channel", tw_chan)
         self.config.set("twitch_token", tw_tok)
@@ -1271,8 +1572,20 @@ class SetupWizard(ctk.CTk):
         self.config.set("user_limit_window_minutes", window_mins)
 
         # 2. Validation
-        if not self.config.get("spotify_playlist_id"):
-            self._show_error("Please select or create a Spotify playlist above!")
+        if chosen_platform == "spotify" and not self.config.get("spotify_playlist_id"):
+            # Try to resolve from dropdown selection cache
+            chosen_name = self.playlist_var.get()
+            for p in self.playlists_cache:
+                if p.get("name") == chosen_name and p.get("id"):
+                    self.config.set("spotify_playlist_id", p["id"])
+                    self.config.set("spotify_playlist_name", p["name"])
+                    break
+
+        if chosen_platform == "spotify" and not self.config.get("spotify_playlist_id"):
+            if not self.spotify_service or not self.spotify_service.is_authorized():
+                self._show_error("Please click 'Connect Spotify Account' to authorize first, or switch to YouTube.")
+            else:
+                self._show_error("Please select or create a Spotify playlist above!")
             return
 
         if not enable_tw and not enable_tt:
@@ -1308,6 +1621,52 @@ class SetupWizard(ctk.CTk):
 
     def _show_success(self, msg: str):
         self.lbl_status.configure(text=f"✅ {msg}", text_color="#1DB954")
+
+
+class SetupWizard(ctk.CTk, BaseSetupWizard):
+    """
+    Interactive Setup and Configuration Wizard for Streamers.
+    Guides non-technical streamers through Spotify authorization,
+    playlist selection/creation, Twitch OAuth login / validation,
+    TikTok handles, and rule settings.
+    """
+
+    def __init__(
+        self,
+        config_manager: Optional[ConfigManager] = None,
+        on_complete: Optional[Callable[[], None]] = None,
+        edit_mode: bool = False
+    ):
+        super().__init__()
+        self._init_wizard(
+            config_manager=config_manager,
+            on_complete=on_complete,
+            edit_mode=edit_mode
+        )
+
+
+class SettingsModal(ctk.CTkToplevel, BaseSetupWizard):
+    """
+    Modal Settings dialog launched from MiniApp without breaking or freezing
+    the parent application's main event loop.
+    """
+
+    def __init__(
+        self,
+        master,
+        config_manager: Optional[ConfigManager] = None,
+        on_complete: Optional[Callable[[], None]] = None
+    ):
+        super().__init__(master)
+        self._init_wizard(
+            config_manager=config_manager,
+            on_complete=on_complete,
+            edit_mode=True
+        )
+        self.lift()
+        self.focus_force()
+        self.grab_set()
+
 
 if __name__ == "__main__":
     app = SetupWizard()

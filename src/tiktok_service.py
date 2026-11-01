@@ -114,13 +114,15 @@ class TikTokListener:
             return
 
         logger.info(f"[TikTok] Song request received from {resolved_display} ({username}): '{query}'")
+        is_broadcaster = self.limiter.is_broadcaster(username)
+        prevent_duplicates = not is_broadcaster
         loop = asyncio.get_running_loop()
         success, reply_msg, track = await loop.run_in_executor(
             None,
             self.spotify.add_song_request,
             query,
             f"TikTok/{resolved_display}",
-            True
+            prevent_duplicates
         )
 
         if success:

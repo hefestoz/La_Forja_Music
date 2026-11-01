@@ -16,11 +16,15 @@ class ConfigManager:
     """
 
     DEFAULT_SETTINGS = {
+        "music_platform": "youtube",
         "spotify_client_id": "",
         "spotify_client_secret": "",
         "spotify_redirect_uri": "http://127.0.0.1:8888/callback",
         "spotify_playlist_id": "",
         "spotify_playlist_name": "",
+        "youtube_initial_playlist": "",
+        "youtube_music_only": True,
+        "youtube_max_duration_seconds": 600,
         "enable_twitch": True,
         "twitch_client_id": "",
         "twitch_token": "",
@@ -105,21 +109,28 @@ class ConfigManager:
         """
         Validates whether minimum required streaming settings are set.
         Must have:
-          - Spotify client ID and secret (or token cache) + playlist ID
+          - A valid music platform configuration:
+            * If 'spotify': Spotify client ID, client secret, and target playlist ID
+            * If 'youtube': Instantly configured (no Google accounts or API keys required)
           - At least one active chat channel (Twitch or TikTok)
         """
-        has_spotify = bool(
-            self.get("spotify_client_id") and
-            self.get("spotify_client_secret") and
-            self.get("spotify_playlist_id")
-        )
+        platform = self.get("music_platform", "spotify")
+
+        if platform == "youtube":
+            has_music = True
+        else:
+            has_music = bool(
+                self.get("spotify_client_id") and
+                self.get("spotify_client_secret") and
+                self.get("spotify_playlist_id")
+            )
 
         has_chat = bool(
             (self.get("enable_twitch", True) and (self.get("twitch_channel") or self.get("twitch_token"))) or
             (self.get("enable_tiktok", True) and self.get("tiktok_username"))
         )
 
-        return has_spotify and has_chat
+        return has_music and has_chat
 
     def get(self, key: str, default: Any = None) -> Any:
         return self._config.get(key, default)

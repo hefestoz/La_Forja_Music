@@ -8,8 +8,9 @@ from urllib.request import urlopen, Request
 from PIL import Image, ImageTk
 import customtkinter as ctk
 
-from src.spotify_service import SpotifyService
+from src.base_music_service import BaseMusicService
 from src.request_limiter import RequestLimiter
+from src.embedded_player import EmbeddedPlayer
 
 logger = logging.getLogger("MiniApp")
 
@@ -19,22 +20,30 @@ ctk.set_default_color_theme("green")
 class MiniApp(ctk.CTk):
     """
     Compact desktop controller window for streamers on their secondary screen.
-    Provides live playback info, skip/pause controls, volume, moderation, and queue feed.
+    Provides live playback info, skip/pause controls, volume, moderation, queue feed,
+    and native in-app embedded video playback for YouTube.
     """
 
     def __init__(
         self,
-        spotify_service: SpotifyService,
+        spotify_service: Any,
         request_limiter: RequestLimiter,
         twitch_channel: str = "N/A",
         tiktok_username: str = "N/A",
-        config_manager: Optional[Any] = None
+        config_manager: Optional[Any] = None,
+        bot_manager: Optional[Any] = None
     ):
         super().__init__()
 
-        self.spotify = spotify_service
+        self.music_service = spotify_service
+        self.spotify = spotify_service  # Backward compatibility alias
         self.limiter = request_limiter
         self.config_manager = config_manager
+        self.bot_manager = bot_manager
+        self.service_type = getattr(self.music_service, "service_type", "spotify")
+
+        self.embedded_player: Optional[EmbeddedPlayer] = None
+        self._video_visible = True
 
         # Fallback to config if not provided or N/A
         enable_tw = self.config_manager.get("enable_twitch", True) if self.config_manager else True
@@ -58,8 +67,8 @@ class MiniApp(ctk.CTk):
 
         # Window settings
         self.title("La Forja Music - Stream Controller")
-        self.geometry("420x700")
-        self.minsize(400, 650)
+        self.geometry("440x780")
+        self.minsize(420, 720)
         self.configure(fg_color="#121318")
 
         self._always_on_top = False
@@ -74,22 +83,34 @@ class MiniApp(ctk.CTk):
     def _build_ui(self):
         # 1. Header Frame
         header = ctk.CTkFrame(self, fg_color="transparent")
-        header.pack(fill="x", padx=16, pady=(14, 6))
+        header.pack(fill="x", padx=14, pady=(12, 6))
 
         title_label = ctk.CTkLabel(
             header,
-            text="🎧 LA FORJA MUSIC",
-            font=ctk.CTkFont(size=17, weight="bold"),
+            text="🎧 LA FORJA",
+            font=ctk.CTkFont(size=15, weight="bold"),
             text_color="#FFFFFF"
         )
         title_label.pack(side="left")
 
+        self.platform_badge = ctk.CTkLabel(
+            header,
+            text="🔴 YouTube Active" if self.service_type == "youtube" else "🟢 Spotify Active",
+            font=ctk.CTkFont(size=11, weight="bold"),
+            text_color="#FE2C55" if self.service_type == "youtube" else "#1DB954",
+            fg_color="#3b1219" if self.service_type == "youtube" else "#102d1d",
+            corner_radius=6,
+            padx=6,
+            pady=2
+        )
+        self.platform_badge.pack(side="left", padx=(8, 0))
+
         self.pin_btn = ctk.CTkButton(
             header,
             text="📌 Pin",
-            width=54,
+            width=48,
             height=28,
-            font=ctk.CTkFont(size=12, weight="bold"),
+            font=ctk.CTkFont(size=11, weight="bold"),
             fg_color="#252836",
             hover_color="#32364a",
             command=self._toggle_always_on_top
@@ -99,14 +120,27 @@ class MiniApp(ctk.CTk):
         self.settings_btn = ctk.CTkButton(
             header,
             text="⚙ Settings",
-            width=76,
+            width=66,
             height=28,
-            font=ctk.CTkFont(size=12, weight="bold"),
+            font=ctk.CTkFont(size=11, weight="bold"),
             fg_color="#252836",
             hover_color="#32364a",
             command=self._open_settings
         )
-        self.settings_btn.pack(side="right", padx=(0, 6))
+        self.settings_btn.pack(side="right", padx=(0, 4))
+
+        self.video_toggle_btn = ctk.CTkButton(
+            header,
+            text="👁 Hide",
+            width=68,
+            height=28,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            fg_color="#FE2C55" if self.service_type == "youtube" else "#252836",
+            hover_color="#E11D48" if self.service_type == "youtube" else "#32364a",
+            command=self._toggle_video_panel
+        )
+        if self.service_type == "youtube":
+            self.video_toggle_btn.pack(side="right", padx=(0, 4))
 
         # 2. Connection Status Bar
         status_bar = ctk.CTkFrame(self, fg_color="#1a1c24", corner_radius=10)
@@ -127,6 +161,16 @@ class MiniApp(ctk.CTk):
         self.tiktok_status.pack(side="right", padx=12, pady=6)
 
         self._update_connection_status()
+
+        # 2.5 In-App Embedded Video Player (YouTube Mode)
+        ov_port = self.config_manager.get("overlay_port", 5000) if self.config_manager else 5000
+        self.embedded_player = EmbeddedPlayer(self, on_video_ended=self._on_video_ended, overlay_port=ov_port, height=260)
+        self.embedded_player.set_music_service(self.music_service)
+        if self.service_type == "youtube":
+            self.embedded_player.pack(fill="x", padx=16, pady=(4, 6))
+            self.after(400, self.embedded_player.start_player)
+        else:
+            self.embedded_player.pack_forget()
 
         # 3. Now Playing Card
         self.np_card = ctk.CTkFrame(self, fg_color="#1a1c24", corner_radius=14)
@@ -356,10 +400,34 @@ class MiniApp(ctk.CTk):
         t.start()
 
     def _poll_spotify_state(self):
-        playback = self.spotify.get_currently_playing()
-        recent = self.spotify.get_recent_requests()
+        try:
+            playback = self.spotify.get_currently_playing()
+            recent = self.spotify.get_recent_requests()
+            pending = self.spotify.get_queue() if hasattr(self.spotify, "get_queue") else []
+        except Exception as e:
+            logger.debug(f"Error fetching playback/recent requests: {e}")
+            playback = None
+            recent = []
+            pending = []
+
+        # In YouTube mode, sync active video ID with embedded player
+        if self.service_type == "youtube" and playback and playback.get("id"):
+            if playback["id"] != self._current_track_id:
+                self._current_track_id = playback["id"]
+                if self.embedded_player:
+                    try:
+                        if self.winfo_exists():
+                            self.after(0, lambda: self.embedded_player.load_video(
+                                playback["id"],
+                                title=playback.get("title"),
+                                artist=playback.get("artist_str")
+                            ))
+                    except Exception:
+                        pass
 
         def update_gui():
+            if not self.winfo_exists():
+                return
             if playback and playback.get("title"):
                 # Title & Artist
                 self.title_lbl.configure(text=playback["title"][:28])
@@ -393,30 +461,68 @@ class MiniApp(ctk.CTk):
 
             else:
                 self.title_lbl.configure(text="No Track Playing")
-                self.artist_lbl.configure(text="Spotify is paused or idle")
+                idle_desc = "YouTube queue is idle" if self.service_type == "youtube" else "Spotify is paused or idle"
+                self.artist_lbl.configure(text=idle_desc)
                 self.requester_lbl.configure(text="")
                 self.progress_bar.set(0)
                 self.time_lbl.configure(text="0:00 / 0:00")
                 self.play_btn.configure(text="▶ Play")
 
-            # Update Queue Feed
-            self._update_queue_ui(recent)
+            # Update Queue Feed with both pending and recent requests
+            self._update_queue_ui(recent, pending)
 
-        self.after(0, update_gui)
+        try:
+            if self.winfo_exists():
+                self.after(0, update_gui)
+        except Exception:
+            pass
 
     def _load_and_set_art(self, url: str):
         img = self._fetch_art_image(url)
         if img:
             def apply():
-                self.art_label.configure(image=img, text="")
-            self.after(0, apply)
+                try:
+                    if self.winfo_exists():
+                        self.art_label.configure(image=img, text="")
+                except Exception:
+                    pass
+            try:
+                if self.winfo_exists():
+                    self.after(0, apply)
+            except Exception:
+                pass
 
-    def _update_queue_ui(self, recent: list):
+    def _update_queue_ui(self, recent: list, pending: Optional[list] = None):
         # Clear existing rows
         for child in self.queue_frame.winfo_children():
             child.destroy()
 
-        if not recent:
+        display_items = []
+        # 1. Pending tracks in queue (Up next)
+        if pending:
+            for item in pending:
+                display_items.append({
+                    "title": item.get("name") or item.get("title", "Unknown"),
+                    "artist": item.get("artist_str") or item.get("artist", "YouTube"),
+                    "requested_by": item.get("requested_by", "Chatter"),
+                    "badge": "⏳ Up Next",
+                    "badge_color": "#FE2C55"
+                })
+
+        # 2. Recent requests
+        if recent:
+            for item in recent:
+                t_key = f"{item.get('title')} - {item.get('artist')}"
+                if not any(f"{p['title']} - {p['artist']}" == t_key for p in display_items):
+                    display_items.append({
+                        "title": item.get("title", "Unknown"),
+                        "artist": item.get("artist", "YouTube"),
+                        "requested_by": item.get("requested_by", "Chatter"),
+                        "badge": "✔ Requested",
+                        "badge_color": "#1DB954"
+                    })
+
+        if not display_items:
             lbl = ctk.CTkLabel(
                 self.queue_frame,
                 text="No song requests yet.\nChatters can type !sr <song> in Twitch or TikTok!",
@@ -426,7 +532,7 @@ class MiniApp(ctk.CTk):
             lbl.pack(pady=20)
             return
 
-        for item in recent[:10]:
+        for item in display_items[:12]:
             row = ctk.CTkFrame(self.queue_frame, fg_color="#212430", corner_radius=8)
             row.pack(fill="x", padx=4, pady=3)
 
@@ -444,26 +550,77 @@ class MiniApp(ctk.CTk):
 
             r_lbl = ctk.CTkLabel(
                 meta,
-                text=f"Requested by: {item.get('requested_by', 'Chatter')}",
+                text=f"{item.get('badge', '🎵')} | Requested by: {item.get('requested_by', 'Chatter')}",
                 font=ctk.CTkFont(size=10),
-                text_color="#1DB954",
+                text_color=item.get("badge_color", "#1DB954"),
                 anchor="w"
             )
             r_lbl.pack(fill="x")
 
+    def _on_video_ended(self):
+        logger.info("[MiniApp] In-app player finished video, advancing queue...")
+        self._on_skip()
+
+    def _toggle_video_panel(self):
+        if not self.embedded_player or self.service_type != "youtube":
+            return
+        self._video_visible = not self._video_visible
+        if self._video_visible:
+            self.embedded_player.pack(fill="x", padx=16, pady=(4, 6), before=self.np_card)
+            self.video_toggle_btn.configure(text="👁 Hide", fg_color="#FE2C55", hover_color="#E11D48")
+        else:
+            self.embedded_player.pack_forget()
+            self.video_toggle_btn.configure(text="👁 Show", fg_color="#252836", hover_color="#32364a")
+
     def _on_skip(self):
-        threading.Thread(target=self.spotify.next_track, daemon=True).start()
+        def do_skip():
+            self.music_service.next_track()
+            if self.service_type == "youtube":
+                curr = self.music_service.get_currently_playing()
+                if curr and curr.get("id"):
+                    self._current_track_id = curr["id"]
+                    if self.embedded_player:
+                        self.after(0, lambda: self.embedded_player.load_video(
+                            curr["id"],
+                            title=curr.get("title"),
+                            artist=curr.get("artist_str")
+                        ))
+                else:
+                    self._current_track_id = None
+                    if self.embedded_player:
+                        self.after(0, self.embedded_player.stop)
+        threading.Thread(target=do_skip, daemon=True).start()
 
     def _on_prev(self):
-        threading.Thread(target=self.spotify.previous_track, daemon=True).start()
+        def do_prev():
+            self.music_service.previous_track()
+            if self.service_type == "youtube":
+                curr = self.music_service.get_currently_playing()
+                if curr and curr.get("id"):
+                    self._current_track_id = curr["id"]
+                    if self.embedded_player:
+                        self.after(0, lambda: self.embedded_player.load_video(
+                            curr["id"],
+                            title=curr.get("title"),
+                            artist=curr.get("artist_str")
+                        ))
+        threading.Thread(target=do_prev, daemon=True).start()
 
     def _on_toggle_play(self):
-        threading.Thread(target=self.spotify.toggle_playback, daemon=True).start()
+        def do_toggle():
+            self.music_service.toggle_playback()
+            if self.service_type == "youtube" and self.embedded_player:
+                self.after(0, self.embedded_player.toggle_playback)
+        threading.Thread(target=do_toggle, daemon=True).start()
 
     def _on_volume_change(self, val):
         vol = int(val)
         self.vol_lbl.configure(text=f"🔊 {vol}%")
-        threading.Thread(target=self.spotify.set_volume, args=(vol,), daemon=True).start()
+        def do_vol():
+            self.music_service.set_volume(vol)
+            if self.service_type == "youtube" and self.embedded_player:
+                self.after(0, lambda: self.embedded_player.set_volume(vol))
+        threading.Thread(target=do_vol, daemon=True).start()
 
     def _on_reset_limits(self):
         self.limiter.reset_limits()
@@ -473,7 +630,11 @@ class MiniApp(ctk.CTk):
         self.after(1500, lambda: None)
 
     def _on_clear_playlist(self):
-        threading.Thread(target=self.spotify.clear_playlist, daemon=True).start()
+        def do_clear():
+            self.music_service.clear_playlist()
+            if self.service_type == "youtube" and self.embedded_player:
+                self.after(0, self.embedded_player.pause)
+        threading.Thread(target=do_clear, daemon=True).start()
 
     def _update_connection_status(self):
         enable_tw = True
@@ -510,16 +671,87 @@ class MiniApp(ctk.CTk):
             self.tiktok_status.configure(text=tt_text, text_color=tt_color)
 
     def _open_settings(self):
-        from src.setup_wizard import SetupWizard
-        wizard = SetupWizard(config_manager=self.config_manager, edit_mode=True)
-        wizard.mainloop()
+        from src.setup_wizard import SettingsModal
+        modal = SettingsModal(self, config_manager=self.config_manager)
+        self.wait_window(modal)
+        self._apply_settings_update()
 
-        if self.config_manager:
-            self.config_manager.load()
-            enable_tw = self.config_manager.get("enable_twitch", True)
-            enable_tt = self.config_manager.get("enable_tiktok", True)
-            tw = (self.config_manager.get("twitch_channel") or self.config_manager.get("twitch_nick") or "N/A") if enable_tw else "Disabled"
-            tt = (self.config_manager.get("tiktok_username") or "N/A") if enable_tt else "Disabled"
-            self.twitch_channel = tw
-            self.tiktok_username = tt
-            self._update_connection_status()
+    def _apply_settings_update(self):
+        if not self.config_manager:
+            return
+
+        self.config_manager.load()
+        enable_tw = self.config_manager.get("enable_twitch", True)
+        enable_tt = self.config_manager.get("enable_tiktok", True)
+        tw = (self.config_manager.get("twitch_channel") or self.config_manager.get("twitch_nick") or "N/A") if enable_tw else "Disabled"
+        tt = (self.config_manager.get("tiktok_username") or "N/A") if enable_tt else "Disabled"
+        self.twitch_channel = tw
+        self.tiktok_username = tt
+        self._update_connection_status()
+
+        new_platform = self.config_manager.get("music_platform", "spotify")
+        logger.info(f"[MiniApp] Settings applied. Current service: {self.service_type}, Target service: {new_platform}")
+
+        if new_platform != self.service_type:
+            logger.info(f"[MiniApp] Switching platform from {self.service_type} to {new_platform}...")
+            if self.bot_manager:
+                new_service = self.bot_manager.switch_music_service(new_platform)
+            else:
+                if new_platform == "youtube":
+                    from src.youtube_service import YouTubeService
+                    new_service = YouTubeService(
+                        initial_playlist=self.config_manager.get("youtube_initial_playlist"),
+                        music_only=self.config_manager.get("youtube_music_only", True),
+                        max_duration_seconds=self.config_manager.get("youtube_max_duration_seconds", 600)
+                    )
+                else:
+                    from src.spotify_service import SpotifyService
+                    new_service = SpotifyService(
+                        client_id=self.config_manager.get("spotify_client_id"),
+                        client_secret=self.config_manager.get("spotify_client_secret"),
+                        redirect_uri=self.config_manager.get("spotify_redirect_uri", "http://127.0.0.1:8888/callback"),
+                        playlist_id=self.config_manager.get("spotify_playlist_id"),
+                        open_browser=False
+                    )
+            self.music_service = new_service
+            self.spotify = new_service
+            self.service_type = new_platform
+            self._current_track_id = None
+            self._last_art_url = None
+            if self.embedded_player:
+                self.embedded_player.set_music_service(new_service)
+
+        self._update_platform_ui()
+
+    def _update_platform_ui(self):
+        """Updates UI components (badge, video button, embedded player) for the active platform."""
+        if hasattr(self, "platform_badge"):
+            if self.service_type == "youtube":
+                self.platform_badge.configure(text="🔴 YouTube Active", fg_color="#3b1219", text_color="#FE2C55")
+            else:
+                self.platform_badge.configure(text="🟢 Spotify Active", fg_color="#102d1d", text_color="#1DB954")
+
+        if self.service_type == "youtube":
+            self._video_visible = True
+            if self.embedded_player:
+                self.embedded_player.pack(fill="x", padx=16, pady=(4, 6), before=self.np_card)
+                self.after(300, self.embedded_player.start_player)
+            if hasattr(self, "video_toggle_btn"):
+                self.video_toggle_btn.configure(text="👁 Hide", fg_color="#FE2C55", hover_color="#E11D48")
+                self.video_toggle_btn.pack(side="right", padx=(0, 6), before=self.settings_btn)
+        else:
+            self._video_visible = False
+            if self.embedded_player:
+                self.embedded_player.stop()
+                self.embedded_player.pack_forget()
+            if hasattr(self, "video_toggle_btn"):
+                self.video_toggle_btn.pack_forget()
+
+            # Reset Now Playing card to Spotify waiting state
+            self.title_lbl.configure(text="Waiting for Spotify...")
+            self.artist_lbl.configure(text="Play a song to begin")
+            self.requester_lbl.configure(text="")
+            self.progress_bar.set(0)
+            self.time_lbl.configure(text="0:00 / 0:00")
+            self.play_btn.configure(text="▶ Play")
+            self.art_label.configure(image=None, text="🎵")

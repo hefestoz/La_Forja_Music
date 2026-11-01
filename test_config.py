@@ -85,6 +85,47 @@ def test_platform_flexibility_configured():
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
+def test_youtube_music_platform_config():
+    with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tf:
+        temp_path = tf.name
+
+    try:
+        cm = ConfigManager(config_path=temp_path)
+        assert cm.get("music_platform") == "spotify"
+        assert cm.get("youtube_initial_playlist") == ""
+
+        # Switch to YouTube mode without any Spotify credentials
+        cm.set("music_platform", "youtube")
+        cm.set("youtube_initial_playlist", "https://www.youtube.com/playlist?list=PL123")
+        cm.set("enable_twitch", True)
+        cm.set("twitch_channel", "hefestoz")
+
+        # YouTube mode does not require Spotify keys; should be configured!
+        assert cm.is_configured() is True
+        assert cm.save() is True
+
+        # Reload from disk and verify persistence
+        cm2 = ConfigManager(config_path=temp_path)
+        assert cm2.get("music_platform") == "youtube"
+        assert cm2.get("youtube_initial_playlist") == "https://www.youtube.com/playlist?list=PL123"
+        assert cm2.is_configured() is True
+
+        # But if no chat platform is enabled, is_configured() should still be False
+        cm2.set("enable_twitch", False)
+        cm2.set("enable_tiktok", False)
+        assert cm2.is_configured() is False
+
+        # If switched back to Spotify without credentials, should be False
+        cm2.set("enable_twitch", True)
+        cm2.set("music_platform", "spotify")
+        assert cm2.is_configured() is False
+
+        print("[PASS] YouTube No-Login music platform config and is_configured() verified!")
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
 if __name__ == "__main__":
     test_config_defaults_and_override()
     test_platform_flexibility_configured()
+    test_youtube_music_platform_config()

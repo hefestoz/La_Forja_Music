@@ -13,6 +13,8 @@ from src.request_limiter import RequestLimiter
 load_dotenv()
 logger = logging.getLogger("TwitchService")
 
+DEFAULT_TWITCH_CLIENT_ID = ""
+
 class TwitchBot:
     """
     Asynchronous Twitch Chat Bot for song requests.
@@ -91,14 +93,15 @@ class TwitchBot:
             return
 
         logger.info(f"Processing Twitch request from @{username}: '{query}'")
-        # Run Spotify request (Spotify API call is synchronous requests-based, run in executor)
+        is_broadcaster = self.limiter.is_broadcaster(username)
+        prevent_duplicates = not is_broadcaster
         loop = asyncio.get_running_loop()
         success, reply_msg, track = await loop.run_in_executor(
             None,
             self.spotify.add_song_request,
             query,
             username,
-            True
+            prevent_duplicates
         )
 
         if success:

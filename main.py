@@ -51,6 +51,7 @@ class BotManager:
         self.overlay_server: OverlayServer = None
         self.loop: asyncio.AbstractEventLoop = None
         self._thread: threading.Thread = None
+        self._stop_event: Optional[asyncio.Event] = None
 
     def initialize(self):
         # 1. Limiter
@@ -66,18 +67,58 @@ class BotManager:
             broadcaster_username=broadcaster
         )
 
-        # 2. Spotify
-        self.spotify = SpotifyService(
-            client_id=self.config.get("spotify_client_id"),
-            client_secret=self.config.get("spotify_client_secret"),
-            redirect_uri=self.config.get("spotify_redirect_uri", "http://127.0.0.1:8888/callback"),
-            playlist_id=self.config.get("spotify_playlist_id"),
-            open_browser=False
-        )
-        if not self.spotify.is_authorized():
-            print("\n[ERROR] Spotify is not authorized yet.")
-            print("Please run setup wizard (--setup) or: .\\.venv\\Scripts\\python authorize_spotify.py")
-            sys.exit(1)
+        # 2. Music Service (Spotify or YouTube)
+        music_platform = self.config.get("music_platform", "spotify")
+        if music_platform == "youtube":
+            from src.youtube_service import YouTubeService
+            self.spotify = YouTubeService(
+                initial_playlist=self.config.get("youtube_initial_playlist"),
+                music_only=self.config.get("youtube_music_only", True),
+                max_duration_seconds=self.config.get("youtube_max_duration_seconds", 600)
+            )
+            logger.info("Initialized YouTube In-App Music Service (No-Login Mode).")
+        else:
+            self.spotify = SpotifyService(
+                client_id=self.config.get("spotify_client_id"),
+                client_secret=self.config.get("spotify_client_secret"),
+                redirect_uri=self.config.get("spotify_redirect_uri", "http://127.0.0.1:8888/callback"),
+                playlist_id=self.config.get("spotify_playlist_id"),
+                open_browser=False
+            )
+            if not self.spotify.is_authorized():
+                # Launch GUI Setup Wizard automatically so the streamer can connect or switch to YouTube
+                try:
+                    logger.warning("Spotify is selected but not authorized. Launching Setup Wizard...")
+                    wizard = SetupWizard(config_manager=self.config)
+                    wizard.mainloop()
+                    self.config.load()
+                    if self.config.get("music_platform") == "youtube":
+                        from src.youtube_service import YouTubeService
+                        self.spotify = YouTubeService(
+                            initial_playlist=self.config.get("youtube_initial_playlist"),
+                            music_only=self.config.get("youtube_music_only", True),
+                            max_duration_seconds=self.config.get("youtube_max_duration_seconds", 600)
+                        )
+                        logger.info("Initialized YouTube In-App Music Service (No-Login Mode).")
+                    else:
+                        self.spotify = SpotifyService(
+                            client_id=self.config.get("spotify_client_id"),
+                            client_secret=self.config.get("spotify_client_secret"),
+                            redirect_uri=self.config.get("spotify_redirect_uri", "http://127.0.0.1:8888/callback"),
+                            playlist_id=self.config.get("spotify_playlist_id"),
+                            open_browser=False
+                        )
+                except Exception as e:
+                    logger.error(f"Could not open Setup Wizard: {e}")
+
+                if getattr(self.spotify, "service_type", None) != "youtube" and not self.spotify.is_authorized():
+                    print("\n[INFO] Spotify is not authorized yet. Launching with YouTube No-Login mode as fallback.")
+                    from src.youtube_service import YouTubeService
+                    self.spotify = YouTubeService(
+                        initial_playlist=self.config.get("youtube_initial_playlist"),
+                        music_only=self.config.get("youtube_music_only", True),
+                        max_duration_seconds=self.config.get("youtube_max_duration_seconds", 600)
+                    )
 
         # 3. Twitch
         if enable_tw and tw_chan:
@@ -115,15 +156,16 @@ class BotManager:
             logger.error(f"Overlay server initialization failed: {e}")
 
     async def _run_async_services(self):
-        tasks = []
+        self._stop_event = asyncio.Event()
         if self.overlay_server:
             await self.overlay_server.start()
         if self.twitch_bot:
-            tasks.append(asyncio.create_task(self.twitch_bot.start()))
+            asyncio.create_task(self.twitch_bot.start())
         if self.tiktok_listener:
-            tasks.append(asyncio.create_task(self.tiktok_listener.start()))
+            asyncio.create_task(self.tiktok_listener.start())
 
-        await asyncio.gather(*tasks)
+        # Keep server running until explicitly stopped
+        await self._stop_event.wait()
 
     def start_background(self):
         """Starts the async services inside a background thread."""
@@ -138,6 +180,36 @@ class BotManager:
         self._thread = threading.Thread(target=run, daemon=True)
         self._thread.start()
 
+    def switch_music_service(self, new_platform: str):
+        """Dynamically switches active music service between Spotify and YouTube."""
+        logger.info(f"Switching active music backend to '{new_platform}'...")
+        if new_platform == "youtube":
+            from src.youtube_service import YouTubeService
+            self.spotify = YouTubeService(
+                initial_playlist=self.config.get("youtube_initial_playlist"),
+                music_only=self.config.get("youtube_music_only", True),
+                max_duration_seconds=self.config.get("youtube_max_duration_seconds", 600)
+            )
+            logger.info("Initialized YouTube In-App Music Service (No-Login Mode).")
+        else:
+            self.spotify = SpotifyService(
+                client_id=self.config.get("spotify_client_id"),
+                client_secret=self.config.get("spotify_client_secret"),
+                redirect_uri=self.config.get("spotify_redirect_uri", "http://127.0.0.1:8888/callback"),
+                playlist_id=self.config.get("spotify_playlist_id"),
+                open_browser=False
+            )
+            logger.info("Initialized Spotify Music Service.")
+
+        if self.twitch_bot:
+            self.twitch_bot.spotify = self.spotify
+        if self.tiktok_listener:
+            self.tiktok_listener.spotify = self.spotify
+        if self.overlay_server:
+            self.overlay_server.spotify = self.spotify
+
+        return self.spotify
+
     def stop(self):
         """Stops all running bot components."""
         logger.info("Stopping all bot components...")
@@ -147,6 +219,8 @@ class BotManager:
             self.tiktok_listener.stop()
         if self.overlay_server and self.loop and self.loop.is_running():
             asyncio.run_coroutine_threadsafe(self.overlay_server.stop(), self.loop)
+        if self._stop_event and self.loop and self.loop.is_running():
+            self.loop.call_soon_threadsafe(self._stop_event.set)
 
 def print_banner(manager: BotManager):
     print("==========================================================")
@@ -162,8 +236,11 @@ def print_banner(manager: BotManager):
         desc = f"Max {lim.max_songs} songs per stream session"
     print(f"[OK] Quota Policy        -> {desc}")
 
-    p_name = manager.spotify.get_playlist_name()
-    print(f"[OK] Spotify Playlist    -> '{p_name}'")
+    if getattr(manager.spotify, "service_type", "spotify") == "youtube":
+        print(f"[OK] Music Backend       -> YouTube In-App Player (No-Login Mode)")
+    else:
+        p_name = getattr(manager.spotify, "get_playlist_name", lambda: "Target Playlist")()
+        print(f"[OK] Spotify Playlist    -> '{p_name}'")
 
     if manager.twitch_bot:
         print(f"[OK] Twitch Channel      -> #{manager.twitch_bot.channel}")
@@ -185,6 +262,23 @@ def print_banner(manager: BotManager):
     print("   !resetrequests (broadcaster: reset all quotas)")
     print("----------------------------------------------------------\n")
 
+def is_spotify_authorized(config: ConfigManager) -> bool:
+    """Checks if Spotify credentials exist and have a valid authorized session."""
+    cid = config.get("spotify_client_id")
+    csec = config.get("spotify_client_secret")
+    if not cid or not csec:
+        return False
+    try:
+        sp = SpotifyService(
+            client_id=cid,
+            client_secret=csec,
+            redirect_uri=config.get("spotify_redirect_uri", "http://127.0.0.1:8888/callback"),
+            open_browser=False
+        )
+        return sp.is_authorized()
+    except Exception:
+        return False
+
 def main():
     parser = argparse.ArgumentParser(description="La Forja Music Bot")
     parser.add_argument("--no-gui", action="store_true", help="Run without Desktop Mini-App GUI")
@@ -193,13 +287,19 @@ def main():
 
     config = ConfigManager()
 
-    # If setup flag passed or not configured yet
-    if args.setup or not config.is_configured():
+    # Automatically launch Setup Wizard if first-time setup or Spotify authorization is missing
+    needs_setup = args.setup or not config.is_configured()
+    if not needs_setup and config.get("music_platform") == "spotify":
+        if not is_spotify_authorized(config):
+            logger.info("Spotify is selected but authorization is missing. Launching Setup Wizard...")
+            needs_setup = True
+
+    if needs_setup:
         if args.no_gui:
             print("[ERROR] Configuration is incomplete. Please run without --no-gui to configure via Setup Wizard, or edit config.json.")
             sys.exit(1)
 
-        logger.info("Opening Setup Wizard for first-time configuration...")
+        logger.info("Opening Setup Wizard...")
         wizard = SetupWizard(config_manager=config)
         wizard.mainloop()
 
@@ -237,10 +337,13 @@ def main():
                 request_limiter=manager.limiter,
                 twitch_channel=t_chan,
                 tiktok_username=tt_user,
-                config_manager=config
+                config_manager=config,
+                bot_manager=manager
             )
 
             def on_close():
+                if hasattr(app, "embedded_player") and app.embedded_player:
+                    app.embedded_player.stop()
                 manager.stop()
                 app.destroy()
                 sys.exit(0)

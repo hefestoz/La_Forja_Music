@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LaForjaEmbeddedPlayer_{{TOKEN}}</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      background: #0B0D12;
+      color: #FFFFFF;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      overflow: hidden;
+      user-select: none;
+    }
+    #player-container {
+      width: 100%;
+      height: 100%;
+      position: relative;
+      background: #000000;
+    }
+    #yt-player {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0; left: 0;
+      border: none;
+    }
+    #idle-screen {
+      position: absolute;
+      top: 0; left: 0; width: 100%; height: 100%;
+      background: linear-gradient(135deg, #121318 0%, #1a1c24 100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 16px;
+      z-index: 10;
+      transition: opacity 0.3s ease;
+    }
+    .idle-logo {
+      font-size: 36px;
+      margin-bottom: 8px;
+      animation: pulse 2.4s infinite ease-in-out;
+    }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity: 0.9; }
+      50% { transform: scale(1.08); opacity: 1; }
+    }
+    .idle-title {
+      font-size: 15px;
+      font-weight: 700;
+      color: #FFFFFF;
+      margin-bottom: 4px;
+      letter-spacing: 0.5px;
+    }
+    .idle-sub {
+      font-size: 12px;
+      color: #9CA3AF;
+      max-width: 280px;
+      line-height: 1.3;
+    }
+    .badge {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+      background: rgba(18, 19, 24, 0.85);
+      border: 1px solid rgba(254, 44, 85, 0.4);
+      color: #FE2C55;
+      font-size: 10px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 5px;
+      z-index: 20;
+      pointer-events: none;
+      backdrop-filter: blur(4px);
+    }
+    .status-text {
+      position: absolute;
+      bottom: 8px;
+      left: 8px;
+      background: rgba(18, 19, 24, 0.85);
+      color: #1DB954;
+      font-size: 10px;
+      font-weight: 600;
+      padding: 2px 7px;
+      border-radius: 4px;
+      z-index: 20;
+      pointer-events: none;
+    }
+    #unmute-banner {
+      display: none;
+      position: absolute;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: #FE2C55;
+      color: #FFFFFF;
+      font-size: 11px;
+      font-weight: 700;
+      padding: 5px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      z-index: 30;
+      box-shadow: 0 4px 12px rgba(254, 44, 85, 0.5);
+    }
+  </style>
+</head>
+<body>
+  <div id="player-container">
+    <div class="badge">🔴 IN-APP PLAYER</div>
+    <div id="status-bar" class="status-text">● Ready</div>
+    <div id="unmute-banner" onclick="handleUserUnmute()">🔊 Tap to Unmute Audio</div>
+    
+    <div id="idle-screen">
+      <div class="idle-logo">🎧</div>
+      <div class="idle-title">La Forja Music Player</div>
+      <div class="idle-sub">Requests from Twitch or TikTok (!sr) will play here directly</div>
+    </div>
+
+    <div id="yt-player"></div>
+  </div>
+
+  <script src="https://www.youtube.com/iframe_api"></script>
+  <script>
+    const urlParams = new URLSearchParams(window.location.search);
+    const initialVid = urlParams.get('v') || null;
+
+    let player = null;
+    let isApiReady = false;
+    let activeVideoId = initialVid;
+    let lastVolume = 100;
+    let isAdvancing = false;
+
+    if (initialVid) {
+      const idle = document.getElementById('idle-screen');
+      if (idle) idle.style.display = 'none';
+    }
+
+    function handleUserUnmute() {
+      if (player && typeof player.unMute === 'function') {
+        player.unMute();
+        player.setVolume(lastVolume || 100);
+        player.playVideo();
+      }
+      const banner = document.getElementById('unmute-banner');
+      if (banner) banner.style.display = 'none';
+    }
+
+    document.addEventListener('click', () => {
+      handleUserUnmute();
+    });
+
+    function onYouTubeIframeAPIReady() {
+      const config = {
+        height: '100%',
+        width: '100%',
+        playerVars: {
+          'autoplay': 1,
+          'enablejsapi': 1,
+          'origin': window.location.origin,
+          'controls': 1,
+          'modestbranding': 1,
+          'rel': 0,
+          'fs': 0,
+          'playsinline': 1,
+          'iv_load_policy': 3
+        },
+        events: {
+          'onReady': onPlayerReady,
+          'onStateChange': onPlayerStateChange,
+          'onError': onPlayerError
+        }
+      };
+
+      if (initialVid) {
+        config.videoId = initialVid;
+      }
+
+      player = new YT.Player('yt-player', config);
+    }
+
+    function onPlayerReady(event) {
+      isApiReady = true;
+      document.getElementById('status-bar').innerText = '● Connected';
+      if (activeVideoId) {
+        const idle = document.getElementById('idle-screen');
+        if (idle) idle.style.display = 'none';
+        try {
+          if (event && event.target && event.target.playVideo) {
+            event.target.unMute();
+            event.target.setVolume(lastVolume || 100);
+            event.target.playVideo();
+          } else {
+            loadAndPlay(activeVideoId);
+          }
+        } catch (e) {
+          loadAndPlay(activeVideoId);
+        }
+      }
+    }
+
+    function onPlayerStateChange(event) {
+      if (event.data === YT.PlayerState.ENDED) {
+        notifyEnded();
+      } else if (event.data === YT.PlayerState.PLAYING) {
+        const idle = document.getElementById('idle-screen');
+        if (idle) idle.style.display = 'none';
+        document.getElementById('status-bar').innerText = '▶ Playing';
+        if (player && typeof player.isMuted === 'function' && player.isMuted()) {
+          const banner = document.getElementById('unmute-banner');
+          if (banner) banner.style.display = 'block';
+        }
+      } else if (event.data === YT.PlayerState.PAUSED) {
+        document.getElementById('status-bar').innerText = '⏸ Paused';
+      }
+    }
+
+    function onPlayerError(event) {
+      console.warn("YouTube player error:", event.data);
+      // Only advance queue on definitive restriction errors (101 / 150: embedding restricted by owner)
+      if (event.data === 150 || event.data === 101) {
+        document.getElementById('status-bar').innerText = '⚠ Embedding restricted by owner - Skipping...';
+        setTimeout(notifyEnded, 3000);
+      } else {
+        document.getElementById('status-bar').innerText = '⚠ Buffering / Retrying...';
+        if (player && typeof player.playVideo === 'function') {
+          try {
+            player.playVideo();
+          } catch (e) {}
+        }
+      }
+    }
+
+    function notifyEnded() {
+      if (isAdvancing) return;
+      isAdvancing = true;
+      document.getElementById('status-bar').innerText = '⏭ Next Song...';
+
+      fetch('/api/player/ended', { method: 'POST' })
+        .then(res => res.json())
+        .then(data => {
+          isAdvancing = false;
+          if (data && data.current_track && data.current_track.id) {
+            loadAndPlay(data.current_track.id);
+          } else {
+            showIdle();
+          }
+        })
+        .catch(err => {
+          isAdvancing = false;
+          console.error("Error advancing queue:", err);
+        });
+    }
+
+    function loadAndPlay(vid) {
+      if (!vid) return;
+      activeVideoId = vid;
+      const idle = document.getElementById('idle-screen');
+      if (idle) idle.style.display = 'none';
+      if (player && player.loadVideoById) {
+        try {
+          player.loadVideoById(vid);
+          if (typeof player.unMute === 'function') {
+            player.unMute();
+          }
+          player.setVolume(lastVolume || 100);
+          player.playVideo();
+        } catch (e) {
+          console.warn("Error in loadVideoById:", e);
+        }
+      }
+    }
+
+    function showIdle() {
+      activeVideoId = null;
+      const idle = document.getElementById('idle-screen');
+      if (idle) idle.style.display = 'flex';
+      document.getElementById('status-bar').innerText = '● Idle';
+      if (player && player.stopVideo) {
+        player.stopVideo();
+      }
+    }
+
+    async function syncState() {
+      try {
+        const resp = await fetch('/api/now-playing');
+        if (resp.ok) {
+          const track = await resp.json();
+          if (track && track.id) {
+            if (track.id !== activeVideoId && !isAdvancing) {
+              loadAndPlay(track.id);
+            }
+            if (player && isApiReady) {
+              // Sync play / pause
+              if (track.is_playing === false && player.getPlayerState() === YT.PlayerState.PLAYING) {
+                player.pauseVideo();
+              } else if (track.is_playing === true && player.getPlayerState() === YT.PlayerState.PAUSED) {
+                player.playVideo();
+              }
+
+              // Sync volume
+              if (track.volume_percent !== undefined && track.volume_percent !== lastVolume) {
+                lastVolume = track.volume_percent;
+                player.setVolume(lastVolume);
+              }
+
+              // Report progress back
+              if (typeof player.getCurrentTime === 'function' && typeof player.getDuration === 'function') {
+                const cur = player.getCurrentTime() || 0;
+                const dur = player.getDuration() || 0;
+                if (dur > 0) {
+                  fetch('/api/player/progress', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      progress_ms: Math.round(cur * 1000),
+                      duration_ms: Math.round(dur * 1000)
+                    })
+                  }).catch(() => {});
+                }
+              }
+            }
+          } else {
+            if (activeVideoId && !isAdvancing) {
+              showIdle();
+            }
+          }
+        }
+      } catch (e) {
+        console.debug("Sync poll error:", e);
+      }
+    }
+
+    setInterval(syncState, 1000);
+  </script>
+</body>
+</html>

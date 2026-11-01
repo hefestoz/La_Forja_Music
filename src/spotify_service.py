@@ -2,20 +2,25 @@ import os
 import re
 import logging
 from difflib import SequenceMatcher
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, Tuple, List
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 from spotipy.exceptions import SpotifyException
 from dotenv import load_dotenv
+from src.base_music_service import BaseMusicService
 
 load_dotenv()
 logger = logging.getLogger("SpotifyService")
 
-class SpotifyService:
+class SpotifyService(BaseMusicService):
     """
     Manages authentication and interactions with the Spotify Web API.
     Handles searching songs and adding tracks to a designated playlist.
     """
+
+    @property
+    def service_type(self) -> str:
+        return "spotify"
 
     SPOTIFY_SCOPES = [
         "playlist-modify-public",
@@ -58,11 +63,15 @@ class SpotifyService:
 
     def is_authorized(self) -> bool:
         """Checks if a valid Spotify OAuth token exists in cache, automatically refreshing if expired."""
-        token = self.auth_manager.cache_handler.get_cached_token()
-        if not token:
+        try:
+            token = self.auth_manager.cache_handler.get_cached_token()
+            if not token:
+                return False
+            valid_token = self.auth_manager.validate_token(token)
+            return valid_token is not None
+        except Exception as e:
+            logger.debug(f"Could not validate cached Spotify token: {e}")
             return False
-        valid_token = self.auth_manager.validate_token(token)
-        return valid_token is not None
 
     def get_authorize_url(self) -> str:
         """Returns the Spotify OAuth authorization URL."""
@@ -493,7 +502,16 @@ class SpotifyService:
             if playback and playback.get("is_playing"):
                 self.sp.pause_playback()
             else:
-                self.sp.start_playback()
+                try:
+                    self.sp.start_playback()
+                except Exception as se:
+                    devices_res = self.sp.devices()
+                    devices = devices_res.get("devices", []) if devices_res else []
+                    if devices:
+                        target_device = devices[0]["id"]
+                        self.sp.start_playback(device_id=target_device)
+                    else:
+                        raise se
             return True
         except Exception as e:
             logger.warning(f"Failed to toggle playback: {e}")

@@ -24,9 +24,12 @@ class OverlayServer:
     def _setup_routes(self):
         self.app.router.add_get("/", self.handle_overlay)
         self.app.router.add_get("/overlay", self.handle_overlay)
+        self.app.router.add_get("/player", self.handle_player)
         self.app.router.add_get("/api/now-playing", self.handle_now_playing)
         self.app.router.add_get("/api/queue", self.handle_queue)
         self.app.router.add_get("/api/health", self.handle_health)
+        self.app.router.add_post("/api/player/ended", self.handle_player_ended)
+        self.app.router.add_post("/api/player/progress", self.handle_player_progress)
 
     async def handle_overlay(self, request: web.Request) -> web.Response:
         template_path = os.path.join(os.path.dirname(__file__), "templates", "overlay.html")
@@ -37,6 +40,35 @@ class OverlayServer:
         except Exception as e:
             logger.error(f"Failed to read overlay template: {e}")
             return web.Response(text=f"Error loading overlay: {e}", status=500)
+
+    async def handle_player(self, request: web.Request) -> web.Response:
+        template_path = os.path.join(os.path.dirname(__file__), "templates", "player.html")
+        try:
+            with open(template_path, "r", encoding="utf-8") as f:
+                content = f.read()
+            token = request.query.get("token", "default")
+            content = content.replace("{{TOKEN}}", token)
+            return web.Response(text=content, content_type="text/html")
+        except Exception as e:
+            logger.error(f"Failed to read player template: {e}")
+            return web.Response(text=f"Error loading player: {e}", status=500)
+
+    async def handle_player_ended(self, request: web.Request) -> web.Response:
+        loop = asyncio.get_running_loop()
+        next_track = await loop.run_in_executor(None, self.spotify.next_track)
+        curr = await loop.run_in_executor(None, self.spotify.get_currently_playing)
+        return web.json_response({"advanced": bool(next_track), "current_track": curr})
+
+    async def handle_player_progress(self, request: web.Request) -> web.Response:
+        try:
+            data = await request.json()
+            p_ms = data.get("progress_ms", 0)
+            d_ms = data.get("duration_ms")
+            if hasattr(self.spotify, "update_progress"):
+                self.spotify.update_progress(p_ms, d_ms)
+        except Exception:
+            pass
+        return web.json_response({"status": "ok"})
 
     async def handle_now_playing(self, request: web.Request) -> web.Response:
         loop = asyncio.get_running_loop()
